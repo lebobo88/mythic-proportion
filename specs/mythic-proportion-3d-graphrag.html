@@ -132,7 +132,10 @@ th { background: var(--surface-2); }
   <dl>
     <dt>created</dt><dd>2026-07-11</dd>
     <dt>modified</dt><dd>2026-07-11 (initial)</dd>
-    <dt>commits</dt><dd>— (none yet; Phase 0 mints the baseline)</dd>
+    <dt>modified</dt><dd>2026-07-11 — Phase 0 complete (dual public repos live, 159 tests green, scaffold Chrome-validated)</dd>
+    <dt>commits</dt><dd>mythic-proportion: <code>f15584c</code> baseline (main) · <code>813b532</code> feat(p0) scaffold (feat/3d-graphrag)</dd>
+    <dt>commits</dt><dd>FABLE-HARNESS: <code>75a27c1</code> baseline (main)</dd>
+    <dt>repos</dt><dd>github.com/lebobo88/mythic-proportion · github.com/lebobo88/fable-harness (both public)</dd>
     <dt>agent</dt><dd>plan-deep (Fable-5)</dd>
     <dt>session</dt><dd>8fea15c0-a3df-4e5e-8ea4-a5b47dc27334</dd>
     <dt>back refs</dt><dd><code>mythic-proportion/specs/ROADMAP-BRIEF.md</code> (grounding brief + 6 cited research threads) · <code>mythic-proportion/specs/mythic-proportion.html</code> (prior build plan) · <code>mythic-proportion/…Technical Architecture Blueprint.md</code></dd>
@@ -224,7 +227,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 0 ===== -->
   <div class="phase">
-    <h3>Phase 0 — Dual-repo git + greenfield scaffold <code class="status" data-st="wip">[wip]</code></h3>
+    <h3>Phase 0 — Dual-repo git + greenfield scaffold <code class="status" data-st="x">[x]</code></h3>
     <p>Stand up version control and the greenfield skeleton. Two <b>separate public</b> repositories: <code>mythic-proportion/</code> and the enclosing <code>H:\FABLE-HARNESS</code>. FABLE-HARNESS <code>.gitignore</code> excludes <code>mythic-proportion/</code> so the trees never nest; a README link references it as a sibling. Scaffold the target layout (Python sub-packages + a <code>web/</code> Vite workspace served by FastAPI) on a <code>feat/3d-graphrag</code> branch off <code>mythic-proportion</code>'s <code>main</code>. Freeze the behavior-parity checklist as the acceptance contract for P2.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -560,9 +563,13 @@ th { background: var(--surface-2); }
 
 <section id="amendments">
   <h2>Amendments</h2>
-  <details class="amend">
-    <summary>— no amendments yet</summary>
+  <details class="amend" open>
+    <summary>1 amendment</summary>
     <p>Append-only post-execution change history (newest at the bottom). Never rewrite history — only add.</p>
+    <ul>
+      <li><b>2026-07-11 — Phase 0 complete (direct build via typed <code>engineer</code> + <code>verifier</code>).</b>
+        Dual git repos initialized; <code>mythic-proportion</code> (<code>f15584c</code> baseline on <code>main</code>, <code>813b532</code> scaffold on <code>feat/3d-graphrag</code>) and <code>FABLE-HARNESS</code> (<code>75a27c1</code> on <code>main</code>, gitignoring <code>mythic-proportion/</code>). Python sub-packages + declared-only extras (base unaffected); <code>web/</code> Vite+React+R3F workspace building to <code>static_next/</code>; FastAPI <code>/app</code> mount added (legacy <code>/</code> preserved — parity). <b>159 tests green</b> (documented 102 was stale). <code>verifier</code> verdict: <b>pass</b> (7/7 re-derived from disk). Secret-scan clean. Both repos pushed <b>public</b> (github.com/lebobo88/mythic-proportion, github.com/lebobo88/fable-harness). Live Chrome validation of <code>/app</code>: scaffold renders, zero console errors. <b>Decision:</b> P1–P10 execute via the <code>/run</code> lifecycle (per user).</li>
+    </ul>
   </details>
 </section>
 
