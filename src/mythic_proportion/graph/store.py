@@ -408,16 +408,30 @@ class GraphStore:
 
     def replace_communities(self, rows: list[tuple[int, int, int | None, int]]) -> None:
         """Atomically replace the entire ``communities`` table with ``rows``
-        (``(level, cluster, parent_cluster, entity_id)`` tuples).
+        (``(level, cluster, parent_cluster, entity_id)`` tuples), and --
+        in the *same* transaction -- prune any ``community_reports`` (and
+        matching ``report_vectors``) rows whose ``(level, cluster)`` no
+        longer appears in the freshly-persisted set.
 
         Runs as one explicit transaction (``BEGIN IMMEDIATE`` .. ``COMMIT``)
         so a concurrent reader (e.g. a query mode reading community
-        membership mid-request) either sees the *old* full clustering or the
-        *new* one, never a half-written mix -- the "transactional re-cluster,
-        no torn reads" requirement. Whole-graph recompute (delete-then-insert
-        the full table) is deliberately cheap-and-simple at personal-vault
-        scale rather than diffing, matching upstream GraphRAG's own choice.
+        membership, or GLOBAL/DRIFT reading ``community_reports``,
+        mid-request) either sees the *old* full clustering with its old
+        (still-valid) reports, or the *new* clustering with stale reports
+        already gone -- never a mix where a report for a now-nonexistent
+        cluster remains visible to GLOBAL/DRIFT retrieval. This closes the
+        "stale report" data-integrity gap: report *content* for surviving
+        clusters is still refreshed later by
+        :func:`mythic_proportion.graph.reports.generate_community_reports`
+        (which is cache-idempotent and out of scope for this transaction),
+        but a cluster that disappears on re-cluster can never again be
+        retrieved once this call returns, regardless of whether report
+        regeneration runs afterward. Whole-graph recompute (delete-then-insert
+        the full ``communities`` table) is deliberately cheap-and-simple at
+        personal-vault scale rather than diffing, matching upstream
+        GraphRAG's own choice.
         """
+        surviving = {(level, cluster) for level, cluster, _parent, _entity in rows}
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             self._conn.execute("DELETE FROM communities")
@@ -425,11 +439,30 @@ class GraphStore:
                 "INSERT INTO communities(level, cluster, parent_cluster, entity_id) VALUES (?, ?, ?, ?)",
                 rows,
             )
+            self._prune_stale_community_reports(surviving)
         except Exception:
             self._conn.rollback()
             raise
         else:
             self._conn.commit()
+
+    def _prune_stale_community_reports(self, surviving: set[tuple[int, int]]) -> None:
+        """Delete every ``community_reports`` row (and its ``report_vectors``
+        counterpart, if that table exists) whose ``(level, cluster)`` is not
+        in ``surviving``. Caller-transaction-scoped -- never commits/rolls
+        back itself; see :meth:`replace_communities`, the only caller."""
+        stale_ids = [
+            int(row["id"])
+            for row in self._conn.execute("SELECT id, level, cluster FROM community_reports")
+            if (row["level"], row["cluster"]) not in surviving
+        ]
+        if not stale_ids:
+            return
+        has_report_vectors = _table_exists(self._conn, "report_vectors")
+        for report_id in stale_ids:
+            self._conn.execute("DELETE FROM community_reports WHERE id = ?", (report_id,))
+            if has_report_vectors:
+                self._conn.execute("DELETE FROM report_vectors WHERE rowid = ?", (report_id,))
 
     def all_entity_ids(self) -> list[int]:
         return [row["id"] for row in self._conn.execute("SELECT id FROM entities")]

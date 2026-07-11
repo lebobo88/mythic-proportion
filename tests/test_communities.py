@@ -219,6 +219,57 @@ def test_generate_community_reports_writes_one_row_per_community() -> None:
     assert row["rating"] == 8.0
 
 
+def test_replace_communities_prunes_stale_reports_for_clusters_that_disappear() -> None:
+    """Fix for the rejected submission's blocking issue: a `community_reports`
+    (+ `report_vectors`) row for a `(level, cluster)` that no longer exists
+    after re-clustering must be pruned in the *same* transaction as the
+    `communities` replace -- never left behind for GLOBAL/DRIFT to retrieve
+    as stale content, regardless of whether report regeneration runs after."""
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("Ada Lovelace", "PERSON", "a mathematician")
+    b = store.upsert_entity("Charles Babbage", "PERSON", "an inventor")
+
+    # Seed two communities and a report for each.
+    store.replace_communities([(0, 0, None, a), (0, 1, None, b)])
+    store.upsert_community_report(0, 0, "Cluster Zero", "summary-0", "full-0", 5.0)
+    store.upsert_community_report(0, 1, "Cluster One", "summary-1", "full-1", 5.0)
+    assert len(store.list_community_reports()) == 2
+
+    # Re-cluster: cluster 1 disappears entirely (both entities now land in
+    # cluster 0), simulating what a real re-run of `compute_communities`
+    # would do to the `communities` table.
+    store.replace_communities([(0, 0, None, a), (0, 0, None, b)])
+
+    remaining = store.list_community_reports()
+    assert [(r["level"], r["cluster"]) for r in remaining] == [(0, 0)]
+    # The stale report for the now-nonexistent (0, 1) cluster must be gone,
+    # not merely absent from a *new* generation pass -- it must already be
+    # unreachable via list_community_reports()/get_community_report()
+    # immediately after replace_communities() returns, before any report
+    # regeneration has even run.
+    assert store.get_community_report(0, 1) is None
+    assert store.get_community_report(0, 0) is not None
+
+
+def test_replace_communities_keeps_reports_for_surviving_clusters_untouched() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("Ada Lovelace", "PERSON", "a mathematician")
+
+    store.replace_communities([(0, 0, None, a)])
+    store.upsert_community_report(0, 0, "Cluster Zero", "summary-0", "full-0", 5.0)
+
+    # Re-cluster with the same (level, cluster) surviving -- its report must
+    # be left completely alone (report *content* refresh is
+    # generate_community_reports's job, not replace_communities's).
+    store.replace_communities([(0, 0, None, a)])
+
+    row = store.get_community_report(0, 0)
+    assert row is not None
+    assert row["title"] == "Cluster Zero"
+
+
 def test_generate_community_reports_is_idempotent_cache_hit_on_unchanged_community() -> None:
     conn = _memory_conn()
     _seed_one_community(conn)

@@ -208,12 +208,21 @@ def index_graph(
         # reports on every `index-graph` run (cheap at personal-vault scale,
         # per specs/ROADMAP-BRIEF.md §6.2) -- never blocks graph-layer sync
         # if the optional `[graphrag]` extra (or its leidenalg fallback)
-        # isn't installed; that failure is reported, not fatal.
+        # isn't installed; that failure is reported, not fatal. The
+        # `except ImportError` below is scoped to *only* `compute_communities`
+        # (the one call that lazily imports graspologic/leidenalg) -- it
+        # deliberately does NOT wrap `generate_community_reports`, so any
+        # unrelated ImportError raised during report generation propagates
+        # as a real failure instead of being misreported as "optional
+        # clustering backend absent".
         from mythic_proportion.graph.communities import compute_communities
         from mythic_proportion.graph.reports import generate_community_reports
 
         try:
             community_report = compute_communities(store.conn)
+        except ImportError as exc:
+            console.print(f"[yellow]Skipping community/report generation:[/yellow] {exc}")
+        else:
             reports_report = generate_community_reports(
                 store.conn,
                 client=client,
@@ -227,8 +236,6 @@ def index_graph(
                 f"{reports_report.reports_written} report(s) written, "
                 f"{reports_report.llm_calls} LLM call(s)"
             )
-        except ImportError as exc:
-            console.print(f"[yellow]Skipping community/report generation:[/yellow] {exc}")
 
     console.print(
         f"[green]Graph reindexed:[/green] +{report.text_units_added} text unit(s), "

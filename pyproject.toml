@@ -31,7 +31,7 @@ dev = ["pytest", "pytest-cov", "ruff", "mypy", "httpx"]
 # specs/mythic-proportion-3d-graphrag.html). All heavy imports inside
 # `graph/`, `privacy/`, `agents/`, `mcp/` stay lazy so the base install
 # remains unaffected by these declarations.
-graphrag = ["graspologic"]
+graphrag = ["graspologic", "leidenalg", "python-igraph"]
 privacy = ["presidio-analyzer", "presidio-anonymizer"]
 local = ["httpx"]
 mcp = ["fastmcp"]

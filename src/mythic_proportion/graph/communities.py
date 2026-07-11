@@ -34,8 +34,9 @@ DEFAULT_MAX_CLUSTER_SIZE = 50
 
 _INSTALL_HINT = (
     "Community detection requires the '[graphrag]' extra: "
-    "pip install 'mythic-proportion[graphrag]' (graspologic), or as a "
-    "lighter Windows-friendly fallback: pip install leidenalg python-igraph"
+    "pip install 'mythic-proportion[graphrag]' -- this now installs both the "
+    "primary backend (graspologic) and the lighter Windows-friendly fallback "
+    "(leidenalg + python-igraph)"
 )
 
 

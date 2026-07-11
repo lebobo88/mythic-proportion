@@ -337,7 +337,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 4 ===== -->
   <div class="phase">
-    <h3>Phase 4 — Communities + retrieval modes <code class="status">[]</code></h3>
+    <h3>Phase 4 — Communities + retrieval modes <code class="status" data-st="wip">[wip]</code></h3>
     <p>Turn the graph into a retrieval engine. graspologic hierarchical Leiden clustering (pinned seed for stable IDs) into <code>communities</code>; LLM-written <code>community_reports</code> (cached by community content-hash); and the four GraphRAG query modes plus query-aware spreading-activation, all expressed over sqlite-vec + FTS5 + recursive CTEs. Wire the Ask view to choose a mode. Dispatch <code>security-reviewer</code> for the concurrency/data-integrity of graph writes during re-cluster.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
