@@ -264,7 +264,12 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         # `IndexStore` manages -- opened read-only-in-spirit here (embedder
         # `None` means this open never re-embeds/reindexes pages; it's just
         # a connection onto whatever `mythic index-graph` already wrote).
-        with IndexStore(vault_root, embedder=None) as store:
+        # `sync_embedder=False` is load-bearing: without it, an
+        # `embedder=None` open looks like an embedder-identity *change*
+        # against a vault already indexed with a real embedder, and
+        # `_sync_embedder_meta` wipes pages/pages_fts/page_vectors/vec_pages
+        # as a result. This open must never touch that state.
+        with IndexStore(vault_root, embedder=None, sync_embedder=False) as store:
             entity_nodes, entity_edges = GraphStore(store.conn).read_entity_graph()
 
         if mode == "entities":

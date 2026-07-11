@@ -105,6 +105,7 @@ class IndexStore:
         *,
         use_vec: bool | None = None,
         db_path: Path | None = None,
+        sync_embedder: bool = True,
     ) -> None:
         self._vault_root = Path(vault_root)
         self._db_path = Path(db_path) if db_path is not None else self._vault_root / INDEX_DB_RELATIVE_PATH
@@ -112,6 +113,17 @@ class IndexStore:
         self._use_vec = use_vec
         self._conn: sqlite3.Connection | None = None
         self._vec_available = False
+        # When False, `.open()` skips `_sync_embedder_meta()` entirely: no
+        # meta read/write, no wipe-on-mismatch. This is for callers that only
+        # need a connection onto whatever is already on disk (e.g. reading
+        # the GraphRAG tables) and pass `embedder=None` *not* to mean "no
+        # embedder configured" but "I'm not embedding anything in this open,
+        # don't touch the embedder identity/state at all." Without this flag,
+        # `embedder=None` -> `_embedder_id() == "none"`, which looks like a
+        # real embedder-identity *change* against a vault indexed with a real
+        # embedder and triggers `_sync_embedder_meta`'s destructive
+        # DELETE FROM pages/pages_fts/page_vectors + DROP TABLE vec_pages.
+        self._sync_embedder = sync_embedder
 
     # -- lifecycle ------------------------------------------------------
 
@@ -137,7 +149,8 @@ class IndexStore:
         self._conn = conn
         self._vec_available = self._try_load_vec_extension()
         conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
-        self._sync_embedder_meta()
+        if self._sync_embedder:
+            self._sync_embedder_meta()
         return self
 
     def close(self) -> None:

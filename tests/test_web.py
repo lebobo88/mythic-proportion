@@ -346,6 +346,54 @@ def test_api_graph_rejects_invalid_mode(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+def test_api_graph_entities_mode_does_not_wipe_the_hybrid_search_index(tmp_path: Path) -> None:
+    """Regression for the reject-triggering defect: `GET /api/graph?mode=entities`
+    (and `mode=both`) must never touch `pages`/`pages_fts`/`page_vectors` or the
+    stored `embedder_id`, no matter how it opens `IndexStore` to read the
+    GraphRAG entity tables.
+
+    Before the fix, that read opened `IndexStore(vault_root, embedder=None)`,
+    which `_sync_embedder_meta` treated as an embedder-identity *change* against
+    a vault already indexed with a real embedder (`HashEmbedder:64`, the
+    `get_embedder` default for `Settings.embeddings_backend == "local"`) and
+    wiped `pages`/`pages_fts`/`page_vectors` (+ dropped `vec_pages`) as a side
+    effect of a single GET.
+    """
+    vault = _seed_vault(tmp_path)
+    # Re-seed with the *app's own default* embedder identity (HashEmbedder
+    # dim=64, matching `get_embedder(Settings())`) so the stored `embedder_id`
+    # is exactly what `create_app`'s default settings would produce -- the
+    # precise condition the reject repro needed to trigger the wipe.
+    with IndexStore(vault, HashEmbedder(dim=64), use_vec=False) as store:
+        store.reindex(vault)
+        conn = store.conn
+        pages_before = conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+        pages_fts_before = conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
+        page_vectors_before = conn.execute("SELECT COUNT(*) FROM page_vectors").fetchone()[0]
+        embedder_id_before = conn.execute(
+            "SELECT value FROM meta WHERE key = 'embedder_id'"
+        ).fetchone()[0]
+    assert pages_before > 0
+    assert pages_fts_before > 0
+    assert page_vectors_before > 0
+    assert embedder_id_before == "HashEmbedder:64"
+
+    client = _client(vault)
+    for mode in ("entities", "both"):
+        response = client.get("/api/graph", params={"mode": mode})
+        assert response.status_code == 200
+
+    with IndexStore(vault, HashEmbedder(dim=64), use_vec=False, sync_embedder=False) as store:
+        conn = store.conn
+        assert conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0] == pages_before
+        assert conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0] == pages_fts_before
+        assert conn.execute("SELECT COUNT(*) FROM page_vectors").fetchone()[0] == page_vectors_before
+        assert (
+            conn.execute("SELECT value FROM meta WHERE key = 'embedder_id'").fetchone()[0]
+            == embedder_id_before
+        )
+
+
 def test_api_lint_reports_clean_vault(tmp_path: Path) -> None:
     vault = _seed_vault(tmp_path)
     client = _client(vault)
