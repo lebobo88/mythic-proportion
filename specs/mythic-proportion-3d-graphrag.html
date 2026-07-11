@@ -256,7 +256,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 1 ===== -->
   <div class="phase">
-    <h3>Phase 1 — Design-system foundation <code class="status">[]</code></h3>
+    <h3>Phase 1 — Design-system foundation <code class="status" data-st="x">[x]</code></h3>
     <p>Build the ground-up design system before feature UI, so every later view consumes tokens rather than hard-coded values. Three-tier OKLCH CSS variables (primitive → semantic → component) including a dedicated <code>--graph-*</code> family that the 3D scene will read at runtime; shadcn/ui components (Base UI or Radix primitives); a Cmd+K command-palette navigation spine; motion tokens; light/dark theming. Dispatch <code>designer</code> + <code>design-system-curator</code> for the token/component specs, <code>engineer</code> to implement.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -569,6 +569,10 @@ th { background: var(--surface-2); }
     <ul>
       <li><b>2026-07-11 — Phase 0 complete (direct build via typed <code>engineer</code> + <code>verifier</code>).</b>
         Dual git repos initialized; <code>mythic-proportion</code> (<code>f15584c</code> baseline on <code>main</code>, <code>813b532</code> scaffold on <code>feat/3d-graphrag</code>) and <code>FABLE-HARNESS</code> (<code>75a27c1</code> on <code>main</code>, gitignoring <code>mythic-proportion/</code>). Python sub-packages + declared-only extras (base unaffected); <code>web/</code> Vite+React+R3F workspace building to <code>static_next/</code>; FastAPI <code>/app</code> mount added (legacy <code>/</code> preserved — parity). <b>159 tests green</b> (documented 102 was stale). <code>verifier</code> verdict: <b>pass</b> (7/7 re-derived from disk). Secret-scan clean. Both repos pushed <b>public</b> (github.com/lebobo88/mythic-proportion, github.com/lebobo88/fable-harness). Live Chrome validation of <code>/app</code>: scaffold renders, zero console errors. <b>Decision:</b> P1–P10 execute via the <code>/run</code> lifecycle (per user).</li>
+      <li><b>2026-07-11 — Phase 1 complete (via <code>/run</code> lifecycle, run <code>20260711-141439-p1-design-system</code>).</b>
+        20 typed agents; taxonomy mapped to §4.4/§4.8/§4.10/§4.13; a <b>cross-vendor Codex review</b> ran on the designer stage. Implemented + committed <code>9162a12</code> on <code>feat/3d-graphrag</code>: three-tier OKLCH tokens (<code>primitives/semantic/components/graph/motion.css</code>) incl. the <code>--graph-*</code> family + a <code>graph-colors.ts</code> THREE.Color runtime bridge; motion tokens (reduced-motion-gated); shadcn-style primitives (Button/Input/Dialog/Combobox/Tooltip); app shell (Header/TabNav/ThemeToggle); Cmd+K command palette; light/dark theming; <code>/design</code> preview route.
+        <b>Independent verification (from disk, not the run's self-report):</b> <code>tsc -b &amp;&amp; vite build</code> compiles (296 modules → <code>static_next</code>); vitest <b>21/21</b>; Python <b>159/159</b>; live Chrome: shell renders, dark/light toggle works, Cmd+K palette (NAVIGATE + PAGES) works, zero console errors.
+        <b>⚠ Governance caveat:</b> the run auto-reported <code>status: surfaced</code> with §4.8/§4.10/§4.13 <code>reject</code> + missability <code>reject</code> — a <b>plumbing false-negative</b>: the section producers didn't persist <code>.fable/&lt;run&gt;/stages/*.json</code>, so <code>verifier</code> fail-closed per N4 and missability mis-read "no artifacts" though artifacts + code clearly exist. Phase accepted on independent disk evidence. This stages-file gap will recur on P2–P10 unless addressed.</li>
     </ul>
   </details>
 </section>
