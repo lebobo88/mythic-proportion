@@ -19,6 +19,8 @@ export interface CommandPaletteProps {
   /** Live page list (see `lib/usePages.ts`) -- the "Pages" jump-to group. */
   pages?: PageListItem[];
   onJumpToPage?: (path: string) => void;
+  /** Phase 5: jump straight to the Graph tab with that page's node focused -- see lib/graphFocusBus.ts. */
+  onJumpToGraphNode?: (path: string) => void;
 }
 
 export function CommandPalette({
@@ -27,6 +29,7 @@ export function CommandPalette({
   onSelectTab,
   pages = [],
   onJumpToPage,
+  onJumpToGraphNode,
 }: CommandPaletteProps) {
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -87,6 +90,20 @@ export function CommandPalette({
                 </ComboboxItem>
               ))}
             </ComboboxGroup>
+
+            {onJumpToGraphNode ? (
+              <ComboboxGroup heading="Graph">
+                {pages.map((page) => (
+                  <ComboboxItem
+                    key={`graph-${page.path}`}
+                    value={`focus graph node ${page.title}`}
+                    onSelect={() => runAndClose(() => onJumpToGraphNode(page.path))}
+                  >
+                    Focus {page.title} in Graph
+                  </ComboboxItem>
+                ))}
+              </ComboboxGroup>
+            ) : null}
 
             <ComboboxGroup heading="Actions">
               <ComboboxItem value="run ask" onSelect={() => runAndClose(() => onSelectTab("Ask"))}>

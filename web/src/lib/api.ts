@@ -216,8 +216,16 @@ export async function runQuery(
   return res.json();
 }
 
-export async function fetchGraph(): Promise<GraphData> {
-  const res = await fetchJsonWithTimeout("/api/graph");
+// Phase 5: `mode` selects which server-side graph view to fetch (see
+// `api_graph` in src/mythic_proportion/web/app.py) -- "wikilinks" (default),
+// "entities" (GraphRAG semantic graph), or "both". Omitting `mode` entirely
+// preserves the exact pre-Phase-5 request shape (`GET /api/graph`, no query
+// string) -- load-bearing for api-legacy-parity.test.ts.
+export type GraphMode = "wikilinks" | "entities" | "both";
+
+export async function fetchGraph(mode?: GraphMode): Promise<GraphData> {
+  const url = mode ? `/api/graph?mode=${encodeURIComponent(mode)}` : "/api/graph";
+  const res = await fetchJsonWithTimeout(url);
   if (!res.ok) throw new Error(`unexpected status ${res.status}`);
   return res.json();
 }

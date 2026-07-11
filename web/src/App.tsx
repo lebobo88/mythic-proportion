@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { AppShell } from "./components/shell/AppShell";
 import { TooltipProvider } from "./components/ui";
 import { CommandPalette } from "./components/command-palette/CommandPalette";
@@ -6,13 +6,18 @@ import { DesignPreview } from "./routes/DesignPreview";
 import { WikiView } from "./routes/wiki/WikiView";
 import { SearchView } from "./routes/search/SearchView";
 import { AskView } from "./routes/ask/AskView";
-import { GraphView } from "./routes/graph/GraphView";
 import { IngestView } from "./routes/ingest/IngestView";
 import { LintView } from "./routes/lint/LintView";
 import { SettingsView } from "./routes/settings/SettingsView";
 import { useTheme } from "./lib/useTheme";
 import { usePages } from "./lib/usePages";
+import { requestGraphFocus } from "./lib/graphFocusBus";
 import { TABS, type TabName } from "./components/shell/TabNav";
+
+// Phase 5 perf hygiene (deliverable 11): three.js is ~150KB+ gz and doesn't
+// tree-shake well -- lazy-load the Graph route so it never lands in the
+// main bundle for users who never open the Graph tab.
+const GraphView = lazy(() => import("./routes/graph/GraphView"));
 
 // Minimal hash router: `#/design` shows the living design-system preview
 // (Phase 1 deliverable); `#/page?path=<encoded path>` (the same pattern the
@@ -57,6 +62,13 @@ function App() {
     setSelectedPagePath(path);
   }, []);
 
+  // Cmd+K "jump to page" also refocuses the Graph view on that node if/when
+  // the user switches there -- see lib/graphFocusBus.ts.
+  const jumpToGraphNode = useCallback((path: string) => {
+    setActiveTab("Graph");
+    requestGraphFocus(path);
+  }, []);
+
   if (hash === "#/design") {
     return (
       <TooltipProvider>
@@ -86,7 +98,11 @@ function App() {
         ) : null}
         {activeTab === "Search" ? <SearchView onOpenPage={openPage} /> : null}
         {activeTab === "Ask" ? <AskView /> : null}
-        {activeTab === "Graph" ? <GraphView onOpenPage={openPage} /> : null}
+        {activeTab === "Graph" ? (
+          <Suspense fallback={<p>Loading graph...</p>}>
+            <GraphView onOpenPage={openPage} />
+          </Suspense>
+        ) : null}
         {activeTab === "Ingest" ? <IngestView onIngestComplete={refreshPages} /> : null}
         {activeTab === "Lint" ? <LintView /> : null}
         {activeTab === "Settings" ? <SettingsView /> : null}
@@ -97,6 +113,7 @@ function App() {
         onSelectTab={setActiveTab}
         pages={pages}
         onJumpToPage={openPage}
+        onJumpToGraphNode={jumpToGraphNode}
       />
     </TooltipProvider>
   );
