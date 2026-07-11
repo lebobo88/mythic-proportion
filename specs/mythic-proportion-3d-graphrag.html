@@ -310,7 +310,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 3 ===== -->
   <div class="phase">
-    <h3>Phase 3 — GraphRAG data layer <code class="status" data-st="wip">[wip]</code></h3>
+    <h3>Phase 3 — GraphRAG data layer <code class="status" data-st="x">[x]</code></h3>
     <p>Add the semantic-graph substrate. New SQLite tables coexisting with <code>pages/pages_fts/page_vectors</code>; entity/relationship/claim extraction via GraphRAG-style prompted <b>delimited tuples</b> (more drift-robust than nested JSON) with a gleaning recall loop; an <code>llm_cache</code> keyed on <code>sha256(prompt||model)</code> for idempotent, incremental re-indexing. Borrow MS GraphRAG's MIT prompt text; hand-roll the orchestration. Dispatch <code>data-modeler</code> for the schema, <code>engineer</code> for extraction, <code>security-reviewer</code> for the prompt-injection surface of ingested content.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -580,6 +580,9 @@ th { background: var(--surface-2); }
         <b>Debt closed</b> (per user "close everything") by three typed producers: <code>engineer</code> added per-view Vitest tests + a legacy-parity suite (<b>vitest 21 → 53</b>); <code>security-reviewer</code> wrote <code>docs/security/{threat-model,control-matrix,data-classification,sbom}.md</code>; <code>docs-author</code> wrote <code>docs/{CHANGELOG,frontend}.md</code>.
         <b>Independent verification:</b> vitest <b>53/53</b>, <code>npm run build</code> OK, Python <b>159/159</b>, live Chrome: Wiki (empty-state graceful) + Settings (real <code>/api/config</code>+<code>/api/models</code> data, no key field) render, zero console errors.
         <b>Tracked follow-ups</b> (documented, deferred to their phases): unredacted cloud-LLM egress → P6; CORS/CSRF on state-changing <code>/api/*</code> + upload size cap → security hardening; audit trails/correlation-IDs → P8 MCP.</li>
+      <li><b>2026-07-11 — Phase 3 complete (via <code>/run</code> run <code>20260711-161002-p3-graphrag-data-layer</code> + dedup fix).</b>
+        The fixed <code>/run</code> reported <b>truthfully</b>: missability <b>PASS</b>, 6/7 <code>pass-with-notes</code>, and exactly ONE real <b>cross-vendor (Codex) reject</b> (§4.5 data-modeler) that caught a genuine relationship-dedup gap. Shipped <code>aa169ed</code> (GraphRAG data layer) + <code>c00e398</code> (self-caught <code>/api/graph?mode</code> index-wipe fix): full <code>graph/</code> package (chunk/extract/tuples/claims/cache/store/index), all GraphRAG tables + <code>llm_cache</code> in schema.sql, delimited-tuple extraction (fence-strip + balanced-scan + repair round-trip + skip-not-abort + title-normalize dedup + constrained-type enum + gleaning), local text-unit embeddings, cache-based idempotency + incremental re-index + ref-count orphan-GC, and <code>/api/graph?mode=entities|both</code> (legacy shape preserved as default). <b>pytest 159 → 200</b> (+41).
+        <b>Dedup fix</b> (<code>2d0b303</code>, closing the Codex finding): <code>UNIQUE INDEX idx_relationships_identity(source_id,target_id,type)</code> + <code>upsert_relationship</code> now <code>ON CONFLICT … DO UPDATE</code> merges (max weight, non-empty description) → duplicate edges impossible before Phase 4's weighted retrieval. pytest → <b>201</b>. Independently verified from disk (pytest 201, index + ON CONFLICT present, build OK).</li>
     </ul>
   </details>
 </section>
