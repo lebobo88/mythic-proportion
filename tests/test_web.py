@@ -16,6 +16,9 @@ fastapi = pytest.importorskip("fastapi")
 
 from mythic_proportion.compile.models import WikiPage  # noqa: E402
 from mythic_proportion.compile.writer import write_page  # noqa: E402
+from mythic_proportion.graph.extract import FakeExtractionClient  # noqa: E402
+from mythic_proportion.graph.index import reindex_graph  # noqa: E402
+from mythic_proportion.graph.tuples import COMPLETION_DELIM, TUPLE_DELIM  # noqa: E402
 from mythic_proportion.index.embeddings import HashEmbedder  # noqa: E402
 from mythic_proportion.index.store import IndexStore  # noqa: E402
 from mythic_proportion.vault.init import init_vault  # noqa: E402
@@ -241,6 +244,106 @@ def test_api_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
     assert data["edges"]
     for node in data["nodes"]:
         assert node["type"] == "concept"
+
+
+def _seed_entity_fixture_response(system: str, user: str, idx: int) -> str:
+    if "MANY entities" in user:
+        return COMPLETION_DELIM
+    if "Hybrid" in user or "hybrid" in user:
+        return (
+            '("entity"' + TUPLE_DELIM + "Hybrid Search" + TUPLE_DELIM + "CONCEPT" + TUPLE_DELIM
+            + "a retrieval technique)" + COMPLETION_DELIM
+        )
+    return COMPLETION_DELIM
+
+
+def test_api_graph_default_mode_is_unchanged_wikilink_shape(tmp_path: Path) -> None:
+    """Extending `/api/graph` with `mode` must not change the default response
+    at all (N9 preserved invariant) -- same query param omitted, same shape."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph")
+    assert response.status_code == 200
+    data = response.json()
+    for node in data["nodes"]:
+        assert set(node.keys()) == {"id", "label", "type"}
+    for edge in data["edges"]:
+        assert set(edge.keys()) == {"source", "target"}
+
+
+def test_api_graph_mode_wikilinks_explicit_matches_default(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    default_response = client.get("/api/graph").json()
+    explicit_response = client.get("/api/graph", params={"mode": "wikilinks"}).json()
+    assert default_response == explicit_response
+
+
+def test_api_graph_mode_entities_returns_extracted_entity_graph(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+
+    llm_client = FakeExtractionClient(_seed_entity_fixture_response)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        reindex_graph(
+            vault,
+            store.conn,
+            extraction_client=llm_client,
+            embedder=store.embedder,
+            vec_active=store.vec_active,
+            model="mock",
+            max_gleanings=0,
+        )
+
+    web_client = _client(vault)
+    response = web_client.get("/api/graph", params={"mode": "entities"})
+    assert response.status_code == 200
+    data = response.json()
+    assert any(node["label"] == "HYBRID SEARCH" and node["kind"] == "entity" for node in data["nodes"])
+
+
+def test_api_graph_mode_entities_is_empty_before_any_extraction_run(tmp_path: Path) -> None:
+    """No `mythic index-graph` run yet -- must be an empty (not erroring) entity graph."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph", params={"mode": "entities"})
+    assert response.status_code == 200
+    assert response.json() == {"nodes": [], "edges": []}
+
+
+def test_api_graph_mode_both_unions_pages_and_entities(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+
+    llm_client = FakeExtractionClient(_seed_entity_fixture_response)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        reindex_graph(
+            vault,
+            store.conn,
+            extraction_client=llm_client,
+            embedder=store.embedder,
+            vec_active=store.vec_active,
+            model="mock",
+            max_gleanings=0,
+        )
+
+    web_client = _client(vault)
+    response = web_client.get("/api/graph", params={"mode": "both"})
+    assert response.status_code == 200
+    data = response.json()
+    kinds = {node["kind"] for node in data["nodes"]}
+    assert kinds == {"page", "entity"}
+
+
+def test_api_graph_rejects_invalid_mode(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph", params={"mode": "bogus"})
+    assert response.status_code == 422
 
 
 def test_api_lint_reports_clean_vault(tmp_path: Path) -> None:

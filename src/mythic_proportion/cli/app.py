@@ -35,7 +35,7 @@ from rich.markup import escape
 
 from mythic_proportion.compile.models import CompileError
 from mythic_proportion.compile.pipeline import compile_source
-from mythic_proportion.config import load_settings
+from mythic_proportion.config import authhub_api_key, authhub_base_url, load_settings
 from mythic_proportion.harness_ingest import DEFAULT_FABLE_ARTIFACT_LIMIT, ingest_harness
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.store import IndexStore
@@ -143,6 +143,73 @@ def reindex(
         f"[green]Reindexed:[/green] +{report.added} added, "
         f"~{report.updated} updated, -{report.deleted} deleted, "
         f"{report.unchanged} unchanged"
+    )
+
+
+@app.command("index-graph", hidden=True)
+def index_graph(
+    vault_path: Optional[Path] = typer.Option(
+        None, "--vault", help="Vault whose GraphRAG data layer to sync (defaults to the current directory)."
+    ),
+    max_gleanings: int = typer.Option(
+        1, "--max-gleanings", help="Max bounded 'did you miss any?' recall-loop rounds per text unit."
+    ),
+) -> None:
+    """Sync the GraphRAG entity/relationship/claim layer (Phase 3).
+
+    Chunks every page into text units, extracts entities/relationships/claims
+    via the configured LLM provider (AuthHub by default; requires
+    AUTHHUB_API_KEY) using prompted delimited-tuple output, and persists them
+    alongside the existing SQLite hybrid-search sidecar. Incremental: only
+    text units whose content changed since the last run are re-extracted
+    (cached via `llm_cache`, so an unchanged vault costs zero LLM calls).
+    Imports the extraction client lazily so the rest of the CLI never
+    requires it; not one of the six headline verbs -- hidden from --help.
+    """
+    root = Path(vault_path) if vault_path is not None else Path.cwd()
+    settings = load_settings(root)
+    embedder = get_embedder(settings)
+
+    api_key = authhub_api_key()
+    if not api_key:
+        console.print(
+            "[red]index-graph requires AUTHHUB_API_KEY to be set (or MYTHIC_LLM_PROVIDER=anthropic "
+            "support, not yet wired for extraction).[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    from mythic_proportion.graph.extract import AuthHubExtractionClient, ExtractionError
+    from mythic_proportion.graph.index import reindex_graph
+
+    client = AuthHubExtractionClient(
+        base_url=authhub_base_url(settings),
+        api_key=api_key,
+        model=settings.llm_model,
+        route_alias=settings.route_alias,
+    )
+
+    with IndexStore(root, embedder) as store:
+        store.reindex(root)
+        try:
+            report = reindex_graph(
+                root,
+                store.conn,
+                extraction_client=client,
+                embedder=embedder,
+                vec_active=store.vec_active,
+                model=settings.llm_model,
+                max_gleanings=max_gleanings,
+            )
+        except ExtractionError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[green]Graph reindexed:[/green] +{report.text_units_added} text unit(s), "
+        f"~{report.text_units_updated} updated, -{report.text_units_deleted} deleted, "
+        f"{report.entities_upserted} entit(y/ies) upserted, "
+        f"{report.relationships_upserted} relationship(s), {report.claims_upserted} claim(s), "
+        f"{report.llm_calls} LLM call(s)"
     )
 
 

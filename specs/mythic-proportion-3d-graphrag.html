@@ -310,7 +310,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 3 ===== -->
   <div class="phase">
-    <h3>Phase 3 — GraphRAG data layer <code class="status">[]</code></h3>
+    <h3>Phase 3 — GraphRAG data layer <code class="status" data-st="wip">[wip]</code></h3>
     <p>Add the semantic-graph substrate. New SQLite tables coexisting with <code>pages/pages_fts/page_vectors</code>; entity/relationship/claim extraction via GraphRAG-style prompted <b>delimited tuples</b> (more drift-robust than nested JSON) with a gleaning recall loop; an <code>llm_cache</code> keyed on <code>sha256(prompt||model)</code> for idempotent, incremental re-indexing. Borrow MS GraphRAG's MIT prompt text; hand-roll the orchestration. Dispatch <code>data-modeler</code> for the schema, <code>engineer</code> for extraction, <code>security-reviewer</code> for the prompt-injection surface of ingested content.</p>
     <h4>Tasks</h4>
     <ul class="checklist">

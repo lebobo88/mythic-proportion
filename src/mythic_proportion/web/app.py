@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.graph.store import GraphStore
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.retrieve import hybrid_search
 from mythic_proportion.index.store import IndexStore
@@ -223,11 +224,27 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         }
 
     @app.get("/api/graph")
-    def api_graph() -> dict[str, Any]:
+    def api_graph(mode: str = "wikilinks") -> dict[str, Any]:
+        """`mode` selects which graph view to return:
+
+        * `wikilinks` (default) -- the original [[wikilink]] page graph.
+          Unchanged from before Phase 3: same node/edge shape, same query,
+          never touches the GraphRAG tables at all.
+        * `entities` -- the GraphRAG semantic graph (entity nodes, typed +
+          weighted relationship edges) populated by `mythic index-graph`
+          (empty nodes/edges if that has never been run).
+        * `both` -- the union of the two, with `"kind": "page"|"entity"` on
+          every node so callers can tell them apart.
+        """
+        if mode not in ("wikilinks", "entities", "both"):
+            raise HTTPException(
+                status_code=422, detail=f"invalid mode {mode!r}: expected one of wikilinks|entities|both"
+            )
+
         pages = collect_pages(vault_root)
         title_to_path = title_to_path_index(pages)
-        nodes = [{"id": page.path, "label": page.title, "type": page.page_type} for page in pages]
-        edges: list[dict[str, str]] = []
+        page_nodes = [{"id": page.path, "label": page.title, "type": page.page_type} for page in pages]
+        page_edges: list[dict[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for page in pages:
             for target_title in page.outbound:
@@ -238,8 +255,24 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
                 if key in seen:
                     continue
                 seen.add(key)
-                edges.append({"source": page.path, "target": target_path})
-        return {"nodes": nodes, "edges": edges}
+                page_edges.append({"source": page.path, "target": target_path})
+
+        if mode == "wikilinks":
+            return {"nodes": page_nodes, "edges": page_edges}
+
+        # `entities`/`both` read the GraphRAG tables from the same SQLite DB
+        # `IndexStore` manages -- opened read-only-in-spirit here (embedder
+        # `None` means this open never re-embeds/reindexes pages; it's just
+        # a connection onto whatever `mythic index-graph` already wrote).
+        with IndexStore(vault_root, embedder=None) as store:
+            entity_nodes, entity_edges = GraphStore(store.conn).read_entity_graph()
+
+        if mode == "entities":
+            return {"nodes": entity_nodes, "edges": entity_edges}
+
+        # mode == "both"
+        kinded_page_nodes = [{**node, "kind": "page"} for node in page_nodes]
+        return {"nodes": kinded_page_nodes + entity_nodes, "edges": page_edges + entity_edges}
 
     @app.post("/api/ingest")
     def api_ingest() -> dict[str, Any]:
