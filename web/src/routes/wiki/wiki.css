@@ -1,0 +1,172 @@
+.mp-wiki {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: var(--space-5);
+  min-height: 60vh;
+}
+
+.mp-wiki-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px solid var(--color-border);
+  padding-right: var(--space-4);
+}
+
+.mp-wiki-filter {
+  width: 100%;
+}
+
+.mp-wiki-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.mp-wiki-page-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-y: auto;
+}
+
+.mp-wiki-empty {
+  padding: var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.mp-wiki-page-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  color: inherit;
+}
+
+.mp-wiki-page-item:hover {
+  background-color: var(--color-bg-elevated);
+}
+
+.mp-wiki-page-item--selected {
+  background-color: var(--color-bg-elevated);
+  border-color: var(--color-accent);
+}
+
+.mp-wiki-page-item-title {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.mp-wiki-page-item-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mp-wiki-type-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background-color: var(--graph-node-concept);
+}
+.mp-wiki-type-dot--source {
+  background-color: var(--graph-node-source);
+}
+.mp-wiki-type-dot--entity {
+  background-color: var(--graph-node-entity);
+}
+.mp-wiki-type-dot--concept {
+  background-color: var(--graph-node-concept);
+}
+.mp-wiki-type-dot--session {
+  background-color: var(--graph-node-session);
+}
+
+.mp-wiki-reading-pane {
+  min-width: 0;
+}
+
+.mp-wiki-empty-state {
+  color: var(--color-text-secondary);
+  padding: var(--space-5);
+}
+
+.mp-wiki-page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mp-wiki-badge {
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+}
+
+.mp-wiki-page-path {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+.mp-wiki-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+}
+
+.mp-wiki-tag {
+  font-size: var(--font-size-xs);
+  background-color: var(--color-bg-elevated);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
+}
+
+.mp-wiki-page-body {
+  line-height: 1.6;
+}
+
+.mp-wiki-links {
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-3);
+}
+
+.mp-wiki-link {
+  color: var(--color-accent);
+}
+
+.mp-wiki-link--dangling {
+  color: var(--color-danger);
+  text-decoration: line-through;
+}
+
+.mp-wiki-muted {
+  color: var(--color-text-secondary);
+}
+
+.mp-wiki-raw-toggle {
+  margin-top: var(--space-5);
+}
+
+.mp-wiki-raw-toggle pre {
+  white-space: pre-wrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  background-color: var(--color-bg-inset);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+}

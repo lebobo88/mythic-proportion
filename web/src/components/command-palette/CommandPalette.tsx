@@ -9,29 +9,23 @@ import {
   ComboboxItem,
 } from "../ui/Combobox";
 import { TABS, type TabName } from "../shell/TabNav";
+import type { PageListItem } from "../../lib/api";
 import "./command-palette.css";
-
-// Placeholder "jump to page" fixtures — Phase 2 replaces this with a live
-// `/api/pages` fetch once the wiki view is rebuilt on this shell (see
-// specs/mythic-proportion-3d-graphrag.html Phase 2). Kept here purely to
-// prove the combobox's fuzzy-search + navigation wiring end to end.
-const DEMO_PAGES = [
-  { id: "index", title: "Index" },
-  { id: "graphrag-notes", title: "GraphRAG notes" },
-  { id: "design-system", title: "Design system" },
-];
 
 export interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelectTab: (tab: TabName) => void;
-  onJumpToPage?: (pageId: string) => void;
+  /** Live page list (see `lib/usePages.ts`) -- the "Pages" jump-to group. */
+  pages?: PageListItem[];
+  onJumpToPage?: (path: string) => void;
 }
 
 export function CommandPalette({
   open,
   onOpenChange,
   onSelectTab,
+  pages = [],
   onJumpToPage,
 }: CommandPaletteProps) {
   useEffect(() => {
@@ -78,14 +72,14 @@ export function CommandPalette({
             </ComboboxGroup>
 
             <ComboboxGroup heading="Pages">
-              {DEMO_PAGES.map((page) => (
+              {pages.map((page) => (
                 <ComboboxItem
-                  key={page.id}
+                  key={page.path}
                   value={`jump to page ${page.title}`}
                   onSelect={() =>
                     runAndClose(() => {
                       onSelectTab("Wiki");
-                      onJumpToPage?.(page.id);
+                      onJumpToPage?.(page.path);
                     })
                   }
                 >
