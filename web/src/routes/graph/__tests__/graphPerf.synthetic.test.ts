@@ -133,3 +133,78 @@ describe("perf hygiene: no setState calls inside useFrame in the 3D scene/instan
     }
   });
 });
+
+// Reflexion critique item 1 (BLOCKING, ADR-0501 fitness): nodes must have a
+// real distance-driven LOD tier, and hidden edges must be actually removed
+// from what's submitted to the GPU each frame (a draw-range cull), not
+// merely recolored toward the background.
+describe("LOD + edge culling (reflexion critique item 1)", () => {
+  it("InstancedNodes registers real distance-driven LOD tiers via InstancedMesh2.addLOD", () => {
+    const source = readSource("InstancedNodes.tsx");
+    const addLodCalls = source.match(/\.addLOD\(/g) ?? [];
+    // At least two extra tiers beyond the base (near) geometry.
+    expect(addLodCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("InstancedEdges clamps the draw range to the visible edge count -- an actual GPU-side cull", () => {
+    const source = readSource("InstancedEdges.tsx");
+    expect(source).toMatch(/setDrawRange\(/);
+    // The cull must be based on the filtered/visible edge list, not the raw edge count.
+    expect(source).toMatch(/visible\.length \* 2/);
+  });
+
+  it("InstancedEdges no longer merely recolors hidden edges toward black as its only visibility mechanism", () => {
+    const source = readSource("InstancedEdges.tsx");
+    // A `fadeT` computed purely from a boolean-visible flag (the old, rejected
+    // approach) must not be the visibility story; visibility now happens via
+    // `visibleIds.has(...)` filtering BEFORE any color/position work occurs.
+    expect(source).toMatch(/edges\.filter\(\(edge\) => visibleIds\.has\(edge\.source\) && visibleIds\.has\(edge\.target\)\)/);
+  });
+});
+
+// Reflexion critique item 2 (BLOCKING, perf/reliability): no per-tick
+// allocation in the worker, and the main-thread edge-position loop scales
+// with visible edges, not total edges.
+describe("no per-tick allocation / no O(all edges) main-thread loop (reflexion critique item 2)", () => {
+  it("forceLayout.worker.ts recycles a preallocated buffer pool instead of allocating a fresh Float32Array every tick", () => {
+    const source = readSource("forceLayout.worker.ts");
+    expect(source).toMatch(/freeBuffers/);
+    expect(source).toMatch(/function takeBuffer/);
+    // The hot path (postTick) must pull from the pool, not construct fresh.
+    const postTickBody = /function postTick\(\) \{([\s\S]*?)\n\}/.exec(source)?.[1] ?? "";
+    expect(postTickBody).toMatch(/takeBuffer\(/);
+    expect(postTickBody).not.toMatch(/new Float32Array\(/);
+  });
+
+  it("InstancedEdges.applyPositions never allocates a Map or iterates the full edge list per tick", () => {
+    const source = readSource("InstancedEdges.tsx");
+    const applyPositionsBody = /applyPositions\(positions, idIndexMap\) \{([\s\S]*?)\n {6}\},/.exec(source)?.[1] ?? "";
+    expect(applyPositionsBody.length).toBeGreaterThan(0);
+    expect(applyPositionsBody).not.toMatch(/new Map/);
+    // Must iterate the precomputed visible-edge list, not `edges` (the full set).
+    expect(applyPositionsBody).toMatch(/visibleEdgesRef\.current/);
+    expect(applyPositionsBody).not.toMatch(/for \(let i = 0; i < edges\.length/);
+  });
+
+  it("ForceLayoutClient exposes a releaseBuffer call so consumed tick buffers are recycled, not garbage", () => {
+    const source = readSource("ForceLayoutClient.ts");
+    expect(source).toMatch(/releaseBuffer/);
+  });
+});
+
+// Reflexion critique item 3 (BLOCKING, C4 silent-supersession): r3f-forcegraph
+// must not be a phantom, never-imported dependency once its integration is
+// formally superseded -- see ADR-0505.
+describe("no phantom r3f-forcegraph dependency (reflexion critique item 3 / ADR-0505)", () => {
+  it("package.json no longer lists r3f-forcegraph as a dependency", () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "..", "package.json"), "utf-8"));
+    expect(pkg.dependencies?.["r3f-forcegraph"]).toBeUndefined();
+  });
+
+  it("no source file in the graph route imports r3f-forcegraph", () => {
+    const files = ["ForceLayoutClient.ts", "forceLayout.worker.ts", "Graph3DScene.tsx", "InstancedNodes.tsx", "InstancedEdges.tsx"];
+    for (const file of files) {
+      expect(readSource(file)).not.toMatch(/from ["']r3f-forcegraph["']/);
+    }
+  });
+});

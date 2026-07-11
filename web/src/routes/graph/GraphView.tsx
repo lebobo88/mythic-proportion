@@ -4,6 +4,7 @@ import { fetchGraph, fetchPage, type GraphData, type PageDetail } from "../../li
 import { subscribeGraphColors, type GraphColors } from "../../lib/graph-colors";
 import { consumePendingGraphFocus, subscribeGraphFocus } from "../../lib/graphFocusBus";
 import { prefersReducedMotion } from "../../lib/motion";
+import { supportsWebGL } from "../../lib/webgl";
 import { deriveVizGraph, neighborsOf } from "./graphMath";
 import { emptyFilterState, nodeVisible, type FilterState, type VizGraphData } from "./types";
 import { generateSyntheticGraph, syntheticGraphSizeFromLocation } from "./synthetic";
@@ -23,7 +24,12 @@ const PROGRESSIVE_DISCLOSURE_START = 40;
 export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }) {
   const [rawData, setRawData] = useState<GraphData>({ nodes: [], edges: [] });
   const [statusHint, setStatusHint] = useState<string | null>(null);
-  const [mode3D, setMode3D] = useState<boolean>(() => !prefersReducedMotion());
+  // Graceful-degradation floor (REQUIRED, deliverable 9 / reflexion critique
+  // item 4): auto-detect at mount (no WebGL support at all) in addition to
+  // the reduced-motion preference; a LIVE context loss is caught separately
+  // via Graph3DScene's onContextLost below, both landing on the same 2D path.
+  const webglAvailable = useMemo(() => supportsWebGL(), []);
+  const [mode3D, setMode3D] = useState<boolean>(() => webglAvailable && !prefersReducedMotion());
   const [colors, setColors] = useState<GraphColors | null>(null);
   const [filter, setFilter] = useState<FilterState>(emptyFilterState());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -132,6 +138,11 @@ export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }
 
   const selectedNode = selectedId ? vizData.nodes.find((n) => n.id === selectedId) : null;
 
+  const handleContextLost = useCallback(() => {
+    setMode3D(false);
+    setStatusHint("3D rendering became unavailable -- switched to the 2D fallback.");
+  }, []);
+
   function toggleTypeFilter(type: string) {
     setFilter((prev) => {
       const types = new Set(prev.types);
@@ -144,7 +155,13 @@ export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }
   return (
     <div className="mp-graph">
       <div className="mp-graph-toolbar">
-        <button type="button" onClick={() => setMode3D((v) => !v)} aria-pressed={mode3D}>
+        <button
+          type="button"
+          onClick={() => setMode3D((v) => !v)}
+          aria-pressed={mode3D}
+          disabled={!mode3D && !webglAvailable}
+          title={!webglAvailable ? "WebGL isn't available in this browser -- 3D mode is disabled." : undefined}
+        >
           {mode3D ? "Switch to 2D" : "Switch to 3D"}
         </button>
         <div className="mp-graph-filters" role="group" aria-label="Filter by type">
@@ -177,6 +194,7 @@ export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }
               neighborIds={neighborIds}
               onHoverNode={setHoveredId}
               onSelectNode={selectNode}
+              onContextLost={handleContextLost}
             />
           ) : (
             <Graph2DFallback

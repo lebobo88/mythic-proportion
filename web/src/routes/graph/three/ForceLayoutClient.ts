@@ -13,7 +13,7 @@ export interface WorkerLike {
   terminate(): void;
 }
 
-export type TickListener = (positions: Float32Array, ids: string[], alpha: number) => void;
+export type TickListener = (positions: Float32Array, ids: string[], alpha: number, revision: number) => void;
 
 export class ForceLayoutClient {
   private worker: WorkerLike;
@@ -25,7 +25,7 @@ export class ForceLayoutClient {
     this.worker.addEventListener("message", (event) => {
       const msg = event.data;
       if (msg.type === "tick") {
-        for (const cb of this.tickListeners) cb(msg.positions, msg.ids, msg.alpha);
+        for (const cb of this.tickListeners) cb(msg.positions, msg.ids, msg.alpha, msg.revision);
       } else if (msg.type === "end") {
         for (const cb of this.endListeners) cb();
       }
@@ -64,6 +64,11 @@ export class ForceLayoutClient {
 
   stop(): void {
     this.worker.postMessage({ type: "stop" });
+  }
+
+  /** Hand a consumed tick buffer back to the worker for recycling (critique item 2 -- no steady-state allocation). */
+  releaseBuffer(buffer: ArrayBuffer): void {
+    this.worker.postMessage({ type: "releaseBuffer", buffer }, [buffer]);
   }
 
   dispose(): void {

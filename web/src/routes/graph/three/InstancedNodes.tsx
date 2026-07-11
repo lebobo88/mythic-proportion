@@ -6,7 +6,7 @@
 // discrete "selected id" / "hovered id" UI state -- see GraphView.tsx).
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { useThree } from "@react-three/fiber";
-import { Color, IcosahedronGeometry, MeshStandardMaterial } from "three";
+import { Color, IcosahedronGeometry, MeshStandardMaterial, PlaneGeometry } from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { GraphColors } from "../../../lib/graph-colors";
 import type { VizNode } from "../types";
@@ -27,7 +27,21 @@ export interface InstancedNodesProps {
   onSelectNode: (id: string) => void;
 }
 
-const GEOMETRY = new IcosahedronGeometry(1, 1);
+// LOD tiers (reflexion critique item 1 / ADR-0501 fitness criteria): a real
+// per-instance distance-driven detail reduction, not just "one geometry for
+// everyone." LOD0 (near, ~42-vert icosahedron) is used for close-up /
+// hovered / selected-range nodes; LOD1 drops to a 12-vert icosahedron past
+// `LOD1_DISTANCE`; LOD2 collapses to a single flat quad -- a cheap
+// point-sprite-equivalent -- past `LOD2_DISTANCE`, which is what makes ~50k
+// nodes affordable once the camera is zoomed out. InstancedMesh2 buckets
+// each *instance* into whichever tier its own camera distance falls into
+// every frame (not a single mesh-wide LOD), so this scales with visible
+// density, not total node count.
+const GEOMETRY_NEAR = new IcosahedronGeometry(1, 1); // ~42 verts
+const GEOMETRY_MID = new IcosahedronGeometry(1, 0); // 12 verts
+const GEOMETRY_FAR = new PlaneGeometry(1.4, 1.4); // 4 verts, point-sprite-equivalent
+const LOD1_DISTANCE = 90;
+const LOD2_DISTANCE = 260;
 
 function colorForNode(node: VizNode, colors: GraphColors): Color {
   if (node.kind === "entity") {
@@ -49,7 +63,11 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
 
   const mesh = useMemo(() => {
     const capacity = Math.max(1, nodes.length);
-    return new InstancedMesh2(GEOMETRY, material, { capacity, createEntities: true, renderer: gl });
+    const m = new InstancedMesh2(GEOMETRY_NEAR, material, { capacity, createEntities: true, renderer: gl });
+    // Real distance-driven LOD tiers -- see the GEOMETRY_* comment above.
+    m.addLOD(GEOMETRY_MID, material, LOD1_DISTANCE);
+    m.addLOD(GEOMETRY_FAR, material, LOD2_DISTANCE);
+    return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material, gl]);
 

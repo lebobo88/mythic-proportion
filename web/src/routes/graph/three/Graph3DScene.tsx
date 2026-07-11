@@ -4,7 +4,7 @@
 // DPR, and camera focus. NEVER calls setState from inside useFrame --
 // discrete UI state (selected/hovered/filters) lives in GraphView.tsx and
 // flows down as props; this file only mutates GPU-facing refs each frame.
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { AdaptiveDpr, OrbitControls, PerformanceMonitor } from "@react-three/drei";
 import type { GraphColors } from "../../../lib/graph-colors";
@@ -27,6 +27,30 @@ export interface Graph3DSceneProps {
   onSelectNode: (id: string) => void;
   /** Dev/test hook: called with each PerformanceMonitor fps sample -- never asserted as a hard budget (see graphPerf tests). */
   onFpsSample?: (fps: number) => void;
+  /**
+   * REQUIRED graceful-degradation floor (reflexion critique item 4): fired
+   * on a `webglcontextlost` event OR a WebGL renderer creation failure, so
+   * the caller (GraphView) can auto-switch to the 2D fallback WITHOUT
+   * requiring the user to notice and click the manual toggle themselves.
+   */
+  onContextLost?: () => void;
+}
+
+/** Catches synchronous WebGLRenderer-construction failures from `<Canvas>` (some
+ *  browsers/drivers throw rather than firing `webglcontextlost`) and reports
+ *  them the same way as a live context loss. */
+class WebglErrorBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch() {
+    this.props.onError();
+  }
+  render() {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
 }
 
 function SceneContents({
@@ -44,6 +68,14 @@ function SceneContents({
   const edgesHandleRef = useRef<InstancedEdgesHandle>(null);
   const latestPositionsRef = useRef(new Map<string, [number, number, number]>());
   const layoutRef = useRef<ForceLayoutClient | null>(null);
+  // id -> offset-into-`positions` cache, rebuilt only when the worker's
+  // node ordering changes (`revision`) -- NOT once per tick (reflexion
+  // critique item 2: this is what lets InstancedEdges.applyPositions stay
+  // O(visible edges) without allocating a fresh Map every tick).
+  const idIndexCacheRef = useRef<{ revision: number; map: Map<string, number> }>({
+    revision: -1,
+    map: new Map(),
+  });
   const [focusTarget, setFocusTarget] = useState<[number, number, number] | null>(null);
 
   const layout = useMemo(() => new ForceLayoutClient(createForceLayoutWorker()), []);
@@ -54,13 +86,20 @@ function SceneContents({
   }, [layout]);
 
   useEffect(() => {
-    const unsubscribe = layout.onTick((positions, ids) => {
+    const unsubscribe = layout.onTick((positions, ids, _alpha, revision) => {
+      const cache = idIndexCacheRef.current;
+      if (cache.revision !== revision) {
+        const map = new Map<string, number>();
+        for (let i = 0; i < ids.length; i++) map.set(ids[i], i);
+        idIndexCacheRef.current = { revision, map };
+      }
       nodesHandleRef.current?.applyPositions(positions, ids);
-      edgesHandleRef.current?.applyPositions(positions, ids);
+      edgesHandleRef.current?.applyPositions(positions, idIndexCacheRef.current.map);
       const map = latestPositionsRef.current;
       for (let i = 0; i < ids.length; i++) {
         map.set(ids[i], [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]]);
       }
+      layout.releaseBuffer(positions.buffer as ArrayBuffer);
     });
     return unsubscribe;
   }, [layout]);
@@ -124,15 +163,36 @@ function SceneContents({
 }
 
 export function Graph3DScene(props: Graph3DSceneProps) {
-  const { onFpsSample, ...sceneProps } = props;
+  const { onFpsSample, onContextLost, ...sceneProps } = props;
+  const reported = useRef(false);
+  const report = () => {
+    if (reported.current) return;
+    reported.current = true;
+    onContextLost?.();
+  };
   return (
-    <Canvas camera={{ position: [0, 0, 60], far: 4000 }} dpr={[0.75, 2]}>
-      <PerformanceMonitor onChange={({ fps }) => onFpsSample?.(fps)}>
-        <AdaptiveDpr pixelated />
-        <Suspense fallback={null}>
-          <SceneContents {...sceneProps} />
-        </Suspense>
-      </PerformanceMonitor>
-    </Canvas>
+    <WebglErrorBoundary onError={report}>
+      <Canvas
+        camera={{ position: [0, 0, 60], far: 4000 }}
+        dpr={[0.75, 2]}
+        onCreated={(state) => {
+          // Auto-fallback floor (critique item 4): a live context loss --
+          // driver crash, GPU reset, tab backgrounding on some mobile
+          // browsers -- fires this event on the WebGLRenderer's canvas;
+          // WebGL creation *failure* is caught by WebglErrorBoundary above.
+          state.gl.domElement.addEventListener("webglcontextlost", (event) => {
+            event.preventDefault();
+            report();
+          });
+        }}
+      >
+        <PerformanceMonitor onChange={({ fps }) => onFpsSample?.(fps)}>
+          <AdaptiveDpr pixelated />
+          <Suspense fallback={null}>
+            <SceneContents {...sceneProps} />
+          </Suspense>
+        </PerformanceMonitor>
+      </Canvas>
+    </WebglErrorBoundary>
   );
 }

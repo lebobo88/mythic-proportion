@@ -1,25 +1,22 @@
 // Web Worker: owns the d3-force-3d simulation entirely off the main thread
 // (deliverable 5 -- "LAYOUT in a Web Worker; warmupTicks -> freeze on
 // onEngineStop; re-heat ONLY on data change or user drag; never block
-// input"). Positions are posted back as a transferable Float32Array
-// (id order == the `nodes` array passed in `init`/`update`) so the main
-// thread only ever copies numbers into InstancedMesh2 matrices inside
-// `useFrame` -- it never runs any force math itself.
+// input"). Positions are posted back as a transferable, RECYCLED
+// Float32Array (see `freeBuffers`/`takeBuffer` below -- no per-tick
+// allocation) with id order == the `nodes` array passed in `init`/`update`,
+// so the main thread only ever copies numbers into InstancedMesh2 matrices
+// inside `useFrame` -- it never runs any force math itself.
 //
-// Engineering note (documented per N9 / the mega-prompt's own internal
-// tension): deliverable 1 asks for `r3f-forcegraph`'s `tickFrame()` driven
-// inside `useFrame` as the simulation authority; deliverable 5 asks for the
-// simulation to live in a Worker. `r3f-forcegraph` is a React/R3F component
-// that ticks the (same underlying d3-force-3d) simulation synchronously on
-// the main thread and has no worker-safe entry point -- it cannot honor
-// both asks at once. At the stated ~50k-node/60fps target, running the
-// simulation main-thread-side is the more likely correctness bug (frame
-// budget blown), so this file drives the SAME underlying `d3-force-3d`
-// engine `r3f-forcegraph` wraps directly inside a Worker; `r3f-forcegraph`
-// stays an installed dependency and its `NodeObject`/`LinkObject` type
-// contracts are reused for this module's own node/link plumbing (see
-// `WorkerNode`/`WorkerLink` below) so the "data/link plumbing" ask isn't
-// simply ignored -- see ForceLayoutClient.ts for the main-thread half.
+// This module does NOT import `r3f-forcegraph` -- see ADR-0505
+// (`.fable/20260711-183729-p5-3d-graph-frontend/artifacts/4.6-adr-0505-supersedes-0501-worker-only-layout.md`),
+// which formally supersedes ADR-0501's mandate to drive `r3f-forcegraph`'s
+// `tickFrame()` from `useFrame`: that pattern is inherently main-thread and
+// cannot coexist with ADR-0502's worker-boundary requirement at the
+// ~50k-node/60fps target. `WorkerNode`/`WorkerLink` below mirror
+// `r3f-forcegraph`'s own `NodeObject`/`LinkObject` field shape by
+// convention (id, x/y/z, fx/fy/fz) but the package itself is not a
+// dependency of this codebase -- see ForceLayoutClient.ts for the
+// main-thread half of this boundary.
 import {
   forceCenter,
   forceCollide,
@@ -49,29 +46,53 @@ export type ForceLayoutInMessage =
   | { type: "reheat" }
   | { type: "drag"; id: string; x: number; y: number; z: number }
   | { type: "dragend"; id: string }
-  | { type: "stop" };
+  | { type: "stop" }
+  /** Main thread hands a consumed tick's transferable buffer back once it's
+   *  done reading it, so the worker can recycle it instead of allocating a
+   *  fresh Float32Array next tick (reflexion critique item 2). */
+  | { type: "releaseBuffer"; buffer: ArrayBuffer };
 
 export type ForceLayoutOutMessage =
-  | { type: "tick"; positions: Float32Array; ids: string[]; alpha: number }
+  /** `revision` increments on every `init`/`update` -- the main thread uses
+   *  it to know when it's safe to keep reusing a cached id->position-index
+   *  map across ticks instead of rebuilding one per tick (also critique
+   *  item 2: eliminates the main-thread per-tick Map allocation). */
+  | { type: "tick"; positions: Float32Array; ids: string[]; alpha: number; revision: number }
   | { type: "end" };
 
 let sim: Simulation3D<WorkerNode> | null = null;
 let nodes: WorkerNode[] = [];
 let ids: string[] = [];
+let revision = 0;
+
+// Preallocated-buffer pool (reflexion critique item 2): the same handful of
+// Float32Arrays get transferred out to the main thread and back again --
+// `postTick` never calls `new Float32Array` once the pool is warm. Buffers
+// are keyed only by size; a stale-size buffer (from before a node-count
+// change) is simply dropped rather than reused.
+const freeBuffers: Float32Array[] = [];
+
+function takeBuffer(size: number): Float32Array {
+  for (let i = freeBuffers.length - 1; i >= 0; i--) {
+    if (freeBuffers[i].length === size) return freeBuffers.splice(i, 1)[0];
+  }
+  return new Float32Array(size);
+}
 
 function postTick() {
   if (!sim) return;
-  const buf = new Float32Array(nodes.length * 3);
+  const buf = takeBuffer(nodes.length * 3);
   for (let i = 0; i < nodes.length; i++) {
     buf[i * 3] = nodes[i].x ?? 0;
     buf[i * 3 + 1] = nodes[i].y ?? 0;
     buf[i * 3 + 2] = nodes[i].z ?? 0;
   }
-  const message: ForceLayoutOutMessage = { type: "tick", positions: buf, ids, alpha: sim.alpha() };
+  const message: ForceLayoutOutMessage = { type: "tick", positions: buf, ids, alpha: sim.alpha(), revision };
   (postMessage as (msg: unknown, transfer: Transferable[]) => void)(message, [buf.buffer]);
 }
 
 function buildSimulation(inNodes: WorkerNode[], inLinks: WorkerLink[], warmupTicks: number) {
+  revision++;
   // Preserve existing positions across an `update` (data-change reheat), keyed
   // by id, so re-fetching graph data doesn't reset the whole layout.
   const previousById = new Map(nodes.map((n) => [n.id, n]));
@@ -131,5 +152,8 @@ self.onmessage = (event: MessageEvent<ForceLayoutInMessage>) => {
     sim?.alphaTarget(0);
   } else if (msg.type === "stop") {
     sim?.stop();
+  } else if (msg.type === "releaseBuffer") {
+    // Recycle the main thread's consumed tick buffer -- see `takeBuffer`.
+    freeBuffers.push(new Float32Array(msg.buffer));
   }
 };
