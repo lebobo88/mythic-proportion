@@ -29,6 +29,13 @@ from mythic_proportion.web.render import render_markdown, render_snippet_html
 
 STATIC_DIR = Path(__file__).with_name("static")
 
+#: Build output of the greenfield Vite/React/R3F workspace (``web/``), mounted
+#: at ``/app`` when present (see ``vite.config.ts``: ``base: "/app/"``,
+#: ``outDir: "../src/mythic_proportion/web/static_next"``). Deliberately a
+#: *new*, sibling directory to the legacy ``static/`` -- the legacy SPA at
+#: ``/`` is untouched (parity requirement, see specs/parity-checklist.md).
+STATIC_NEXT_DIR = Path(__file__).with_name("static_next")
+
 #: Providers ``POST /api/config`` will accept for ``llm_provider``.
 _VALID_PROVIDERS = {"authhub", "anthropic"}
 
@@ -106,6 +113,17 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         app.state.ingest_worker.stop()
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Greenfield Vite/React/R3F build (see web/vite.config.ts), mounted at
+    # /app -- guarded so this no-ops entirely if `npm run build` has never
+    # been run (e.g. a fresh clone without the web/ toolchain). The legacy
+    # SPA at "/" above is unaffected either way (parity requirement).
+    if STATIC_NEXT_DIR.is_dir():
+        app.mount(
+            "/app",
+            StaticFiles(directory=str(STATIC_NEXT_DIR), html=True),
+            name="static_next",
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
