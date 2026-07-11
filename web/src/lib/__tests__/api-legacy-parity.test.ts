@@ -53,7 +53,12 @@ describe("lib/api.ts <-> legacy app.js request-shape parity", () => {
     expect(fetchMock).toHaveBeenCalledWith(`/api/search?q=${encodeURIComponent("a query")}&k=8`);
   });
 
-  it("runQuery() matches legacy runAsk(): POST /api/query with {question, use_llm, k} JSON body", async () => {
+  it("runQuery() matches legacy runAsk(): POST /api/query with {question, use_llm, k, mode} JSON body", async () => {
+    // Phase 4 (specs/mythic-proportion-3d-graphrag.html §Phase 4): `mode`
+    // is a new, additive field -- default "auto" preserves the exact
+    // pre-Phase-4 answer behavior server-side until the graph layer has
+    // data (see `query.engine._resolve_mode`), so this is a wire-contract
+    // addition, not a behavior break.
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ text: "", citations: [], hits: [], used_llm: true, error: false }),
@@ -64,7 +69,7 @@ describe("lib/api.ts <-> legacy app.js request-shape parity", () => {
       expect.objectContaining({
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: "what?", use_llm: true, k: 8 }),
+        body: JSON.stringify({ question: "what?", use_llm: true, k: 8, mode: "auto" }),
       }),
     );
   });

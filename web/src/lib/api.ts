@@ -48,6 +48,11 @@ export interface QueryResponse {
   error: boolean;
 }
 
+// Phase 4: query modes exposed by the Ask view's mode dropdown -- "auto"
+// (default) preserves the legacy answer behavior unchanged until the graph
+// layer has data (see src/mythic_proportion/query/engine.py `_resolve_mode`).
+export type QueryMode = "auto" | "legacy" | "global" | "local" | "drift" | "activation";
+
 export interface GraphNode {
   id: string;
   label: string;
@@ -179,11 +184,16 @@ export async function runSearch(q: string, k = 8): Promise<SearchHit[]> {
   return data.results || [];
 }
 
-export async function runQuery(question: string, useLlm: boolean, k = 8): Promise<QueryResponse> {
+export async function runQuery(
+  question: string,
+  useLlm: boolean,
+  k = 8,
+  mode: QueryMode = "auto",
+): Promise<QueryResponse> {
   const res = await fetch("/api/query", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, use_llm: useLlm, k }),
+    body: JSON.stringify({ question, use_llm: useLlm, k, mode }),
   });
   return res.json();
 }

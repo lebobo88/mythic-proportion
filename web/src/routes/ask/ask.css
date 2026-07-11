@@ -22,6 +22,14 @@
   color: var(--color-text-secondary);
 }
 
+.mp-ask-mode-select {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 .mp-ask-model-hint {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);

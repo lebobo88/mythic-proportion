@@ -117,8 +117,10 @@ def test_cold_start_e2e_init_ingest_reindex_query_lint(tmp_path: Path, monkeypat
     def _fixture(prompt) -> AnswerResult:
         return AnswerResult(text="Hybrid retrieval synthesized answer.", citations=list(prompt.hit_titles[:1]))
 
-    def _query_with_fake_client(root, question, *, k=8, use_llm=True):  # noqa: ANN001
-        return real_answer_query(root, question, k=k, use_llm=use_llm, client=FakeAnswerClient(_fixture))
+    def _query_with_fake_client(root, question, *, k=8, use_llm=True, mode="auto"):  # noqa: ANN001
+        return real_answer_query(
+            root, question, k=k, use_llm=use_llm, mode=mode, client=FakeAnswerClient(_fixture)
+        )
 
     monkeypatch.setattr(cli_app_module, "answer_query", _query_with_fake_client)
     result = runner.invoke(

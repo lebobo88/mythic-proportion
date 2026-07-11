@@ -231,6 +231,34 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     assert "Hybrid Retrieval" in answer.citations
 
 
+def test_api_query_default_mode_is_auto_and_preserves_legacy_behavior(tmp_path: Path, monkeypatch) -> None:
+    """Phase 4: omitting `mode` entirely (every pre-Phase-4 caller) must
+    still resolve to the exact legacy never-500 behavior."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "how does hybrid retrieval work?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["used_llm"] is False
+    assert data["error"] is True
+
+
+def test_api_query_unknown_mode_never_500s(tmp_path: Path) -> None:
+    """An invalid `mode` string must degrade gracefully (per the existing
+    never-500 contract), not crash the request."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "anything", "mode": "not-a-real-mode"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["error"] is True
+
+
 def test_api_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
     vault = _seed_vault(tmp_path)
     client = _client(vault)

@@ -151,7 +151,12 @@ class GraphStore:
         """Insert or merge one entity, deduped on ``(title, type)`` (both
         callers are expected to have already normalized ``title`` via
         ``tuples.normalize_title``). A conflicting re-mention appends a new,
-        distinct description rather than overwriting the first one."""
+        distinct description rather than overwriting the first one.
+
+        Also mirrors the row into ``entities_fts`` (Phase 4: one of the two
+        seed sources -- "FTS5 BM25 UNION sqlite-vec cosine" -- for
+        spreading-activation/LOCAL/DRIFT), exactly like ``IndexStore.upsert_page``
+        keeps ``pages_fts`` in sync."""
         self._conn.execute(
             "INSERT INTO entities(title, type, description) VALUES (?, ?, ?) "
             "ON CONFLICT(title, type) DO UPDATE SET description = CASE "
@@ -163,10 +168,17 @@ class GraphStore:
             (title, type_, description),
         )
         row = self._conn.execute(
-            "SELECT id FROM entities WHERE title = ? AND type = ?", (title, type_)
+            "SELECT id, description FROM entities WHERE title = ? AND type = ?", (title, type_)
         ).fetchone()
+        entity_id = int(row["id"])
+        if _table_exists(self._conn, "entities_fts"):
+            self._conn.execute("DELETE FROM entities_fts WHERE entity_id = ?", (entity_id,))
+            self._conn.execute(
+                "INSERT INTO entities_fts(entity_id, title, description) VALUES (?, ?, ?)",
+                (entity_id, title, row["description"]),
+            )
         self._conn.commit()
-        return int(row["id"])
+        return entity_id
 
     def link_text_unit_entity(self, text_unit_id: int, entity_id: int) -> None:
         self._conn.execute(
@@ -242,11 +254,14 @@ class GraphStore:
         ).fetchall()
         ids = [row["id"] for row in rows]
         has_entity_vectors = _table_exists(self._conn, "entity_vectors")
+        has_entities_fts = _table_exists(self._conn, "entities_fts")
         for entity_id in ids:
             self._conn.execute("DELETE FROM claims WHERE subject_id = ?", (entity_id,))
             self._conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
             if has_entity_vectors:
                 self._conn.execute("DELETE FROM entity_vectors WHERE rowid = ?", (entity_id,))
+            if has_entities_fts:
+                self._conn.execute("DELETE FROM entities_fts WHERE entity_id = ?", (entity_id,))
         if ids:
             self._conn.commit()
         return len(ids)
@@ -298,6 +313,247 @@ class GraphStore:
         self._conn.execute("DELETE FROM entity_vectors WHERE rowid = ?", (entity_id,))
         self._conn.execute("INSERT INTO entity_vectors(rowid, embedding) VALUES (?, ?)", (entity_id, blob))
         self._conn.commit()
+
+    def upsert_report_vector(self, report_id: int, vector: list[float], *, vec_active: bool) -> None:
+        if not vec_active:
+            return
+        blob = _pack_vector(vector)
+        self._conn.execute("DELETE FROM report_vectors WHERE rowid = ?", (report_id,))
+        self._conn.execute("INSERT INTO report_vectors(rowid, embedding) VALUES (?, ?)", (report_id, blob))
+        self._conn.commit()
+
+    def entity_vector_scores(
+        self, query_vector: list[float], candidate_ids: list[int], *, vec_active: bool
+    ) -> dict[int, float]:
+        """Cosine similarity of ``query_vector`` against ``entity_vectors`` for
+        ``candidate_ids`` -- mirrors ``IndexStore._vec_vector_search``/
+        ``_fallback_vector_search`` exactly, just keyed on entity id instead
+        of page path."""
+        if not candidate_ids:
+            return {}
+        if vec_active and _table_exists(self._conn, "entity_vectors"):
+            return self._entity_vector_scores_vec(query_vector, candidate_ids)
+        return self._entity_vector_scores_fallback(query_vector, candidate_ids)
+
+    def _entity_vector_scores_vec(
+        self, query_vector: list[float], candidate_ids: list[int]
+    ) -> dict[int, float]:
+        total = self._conn.execute("SELECT COUNT(*) AS n FROM entity_vectors").fetchone()["n"]
+        if total == 0:
+            return {}
+        blob = _pack_vector(query_vector)
+        rows = self._conn.execute(
+            "SELECT rowid, distance FROM entity_vectors WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (blob, total),
+        ).fetchall()
+        candidates = set(candidate_ids)
+        scores: dict[int, float] = {}
+        for row in rows:
+            if row["rowid"] in candidates:
+                scores[int(row["rowid"])] = 1.0 - row["distance"]
+        return scores
+
+    def _entity_vector_scores_fallback(
+        self, query_vector: list[float], candidate_ids: list[int]
+    ) -> dict[int, float]:
+        if not _table_exists(self._conn, "entity_vectors"):
+            return {}
+        # `entity_vectors` (a vec0 table) can't be scanned without the
+        # extension loaded -- callers on a host with no sqlite-vec simply get
+        # no vector scores here (spreading-activation/LOCAL/DRIFT still work
+        # off the FTS5 lexical seed set alone in that case).
+        return {}
+
+    def report_vector_scores(
+        self, query_vector: list[float], candidate_ids: list[int], *, vec_active: bool
+    ) -> dict[int, float]:
+        """Cosine similarity of ``query_vector`` against ``report_vectors``
+        for ``candidate_ids`` -- used by DRIFT's primer report selection.
+        Returns ``{}`` (never raises) when vectors aren't active/available,
+        exactly like :meth:`entity_vector_scores`'s no-vec fallback."""
+        if not candidate_ids or not vec_active or not _table_exists(self._conn, "report_vectors"):
+            return {}
+        total = self._conn.execute("SELECT COUNT(*) AS n FROM report_vectors").fetchone()["n"]
+        if total == 0:
+            return {}
+        blob = _pack_vector(query_vector)
+        rows = self._conn.execute(
+            "SELECT rowid, distance FROM report_vectors WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+            (blob, total),
+        ).fetchall()
+        candidates = set(candidate_ids)
+        return {int(row["rowid"]): 1.0 - row["distance"] for row in rows if row["rowid"] in candidates}
+
+    def search_entities_fts(self, query: str, *, limit: int = 20) -> list[tuple[int, float]]:
+        """FTS5 BM25 lexical seed search over entity title+description.
+
+        Returns ``[(entity_id, score)]`` with higher-is-better scores (bm25()
+        is negated, exactly like ``IndexStore.bm25_search``). ``[]`` for an
+        empty/unusable query or if ``entities_fts`` doesn't exist yet."""
+        from mythic_proportion.index.store import _build_fts_match_query
+
+        if not _table_exists(self._conn, "entities_fts"):
+            return []
+        fts_query = _build_fts_match_query(query)
+        if not fts_query:
+            return []
+        rows = self._conn.execute(
+            "SELECT entity_id, bm25(entities_fts) AS rank FROM entities_fts "
+            "WHERE entities_fts MATCH ? ORDER BY rank LIMIT ?",
+            (fts_query, limit),
+        ).fetchall()
+        return [(int(row["entity_id"]), -float(row["rank"])) for row in rows]
+
+    # -- communities / community reports (Phase 4) -----------------------------
+
+    def replace_communities(self, rows: list[tuple[int, int, int | None, int]]) -> None:
+        """Atomically replace the entire ``communities`` table with ``rows``
+        (``(level, cluster, parent_cluster, entity_id)`` tuples).
+
+        Runs as one explicit transaction (``BEGIN IMMEDIATE`` .. ``COMMIT``)
+        so a concurrent reader (e.g. a query mode reading community
+        membership mid-request) either sees the *old* full clustering or the
+        *new* one, never a half-written mix -- the "transactional re-cluster,
+        no torn reads" requirement. Whole-graph recompute (delete-then-insert
+        the full table) is deliberately cheap-and-simple at personal-vault
+        scale rather than diffing, matching upstream GraphRAG's own choice.
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._conn.execute("DELETE FROM communities")
+            self._conn.executemany(
+                "INSERT INTO communities(level, cluster, parent_cluster, entity_id) VALUES (?, ?, ?, ?)",
+                rows,
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        else:
+            self._conn.commit()
+
+    def all_entity_ids(self) -> list[int]:
+        return [row["id"] for row in self._conn.execute("SELECT id FROM entities")]
+
+    def list_communities(self) -> dict[tuple[int, int], list[int]]:
+        """``{(level, cluster): [entity_id, ...]}`` for every stored community."""
+        grouped: dict[tuple[int, int], list[int]] = {}
+        for row in self._conn.execute(
+            "SELECT level, cluster, entity_id FROM communities ORDER BY level, cluster, entity_id"
+        ):
+            grouped.setdefault((row["level"], row["cluster"]), []).append(row["entity_id"])
+        return grouped
+
+    def community_levels(self) -> list[int]:
+        return [
+            row["level"]
+            for row in self._conn.execute("SELECT DISTINCT level FROM communities ORDER BY level")
+        ]
+
+    def max_community_level(self) -> int:
+        row = self._conn.execute("SELECT MAX(level) AS m FROM communities").fetchone()
+        return int(row["m"]) if row is not None and row["m"] is not None else 0
+
+    def communities_for_entities(self, entity_ids: list[int], *, level: int) -> list[tuple[int, int]]:
+        """``[(cluster, entity_id)]`` at ``level`` for the given entities."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT cluster, entity_id FROM communities WHERE level = ? AND entity_id IN ({placeholders})",
+            (level, *entity_ids),
+        ).fetchall()
+        return [(int(row["cluster"]), int(row["entity_id"])) for row in rows]
+
+    def get_entities_by_ids(self, entity_ids: list[int]) -> list[dict]:
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT id, title, type, description, degree FROM entities WHERE id IN ({placeholders})",
+            entity_ids,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_relationships_among(self, entity_ids: list[int]) -> list[dict]:
+        """Every relationship whose *both* endpoints are in ``entity_ids``."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT source_id, target_id, type, description, weight FROM relationships "
+            f"WHERE source_id IN ({placeholders}) AND target_id IN ({placeholders})",
+            (*entity_ids, *entity_ids),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def relationships_touching(self, entity_ids: list[int]) -> list[dict]:
+        """Every relationship touching *at least one* of ``entity_ids`` (used
+        by local-expansion/spreading-activation, unlike
+        :meth:`get_relationships_among` which requires *both* endpoints)."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT source_id, target_id, type, description, weight FROM relationships "
+            f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+            (*entity_ids, *entity_ids),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def text_units_for_entities(self, entity_ids: list[int], *, limit: int = 20) -> list[dict]:
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT DISTINCT tu.id, tu.page_path, tu.chunk_index, tu.text FROM text_units tu "
+            f"JOIN text_unit_entities tue ON tue.text_unit_id = tu.id "
+            f"WHERE tue.entity_id IN ({placeholders}) LIMIT ?",
+            (*entity_ids, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def claims_for_entities(self, entity_ids: list[int], *, limit: int = 20) -> list[dict]:
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT id, subject_id, object_id, type, status, description FROM claims "
+            f"WHERE subject_id IN ({placeholders}) OR object_id IN ({placeholders}) LIMIT ?",
+            (*entity_ids, *entity_ids, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_community_report(
+        self, level: int, cluster: int, title: str, summary: str, full_content: str, rating: float
+    ) -> int:
+        row = self._conn.execute(
+            "INSERT INTO community_reports(level, cluster, title, summary, full_content, rating) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(level, cluster) DO UPDATE SET "
+            "title = excluded.title, summary = excluded.summary, "
+            "full_content = excluded.full_content, rating = excluded.rating "
+            "RETURNING id",
+            (level, cluster, title, summary, full_content, rating),
+        ).fetchone()
+        self._conn.commit()
+        return int(row["id"])
+
+    def list_community_reports(self, *, level: int | None = None) -> list[dict]:
+        if level is None:
+            rows = self._conn.execute(
+                "SELECT * FROM community_reports ORDER BY level, cluster"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM community_reports WHERE level = ? ORDER BY cluster", (level,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_community_report(self, level: int, cluster: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM community_reports WHERE level = ? AND cluster = ?", (level, cluster)
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     # -- reads used by GET /api/graph?mode=entities|both ----------------------------
 

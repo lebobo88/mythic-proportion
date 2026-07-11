@@ -51,6 +51,11 @@ class QueryRequest(BaseModel):
     question: str
     use_llm: bool = True
     k: int = 8
+    #: Phase 4: "auto" (default) preserves pre-Phase-4 behavior exactly until
+    #: the graph layer has data (see ``query.engine._resolve_mode``); the
+    #: Ask view's mode dropdown otherwise sends one of "legacy"/"global"/
+    #: "local"/"drift"/"activation" explicitly.
+    mode: str = "auto"
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -199,7 +204,12 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         current_settings = app.state.settings
         try:
             answer = answer_query(
-                vault_root, req.question, k=req.k, use_llm=req.use_llm, settings=current_settings
+                vault_root,
+                req.question,
+                k=req.k,
+                use_llm=req.use_llm,
+                mode=req.mode,
+                settings=current_settings,
             )
         except Exception as exc:  # noqa: BLE001 - the API must never 500 on a query
             # Still surface retrieval hits even when synthesis is unavailable,

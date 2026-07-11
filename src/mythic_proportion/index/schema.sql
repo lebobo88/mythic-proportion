@@ -134,6 +134,19 @@ CREATE TABLE IF NOT EXISTS claims (
 CREATE INDEX IF NOT EXISTS idx_claims_subject_id ON claims(subject_id);
 CREATE INDEX IF NOT EXISTS idx_claims_text_unit_id ON claims(text_unit_id);
 
+-- Lexical (BM25) index over entity title+description -- one of the two seed
+-- sources ("FTS5 BM25 UNION sqlite-vec cosine") for Phase 4's
+-- spreading-activation query mode; also reused by LOCAL/DRIFT seed
+-- selection. Kept in sync by `graph.store.GraphStore.upsert_entity` /
+-- `delete_orphan_entities`, mirroring exactly how `pages_fts` is kept in
+-- sync by `IndexStore.upsert_page`/`delete_page` above.
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+    entity_id UNINDEXED,
+    title,
+    description,
+    tokenize = 'porter unicode61'
+);
+
 -- Phase 4 fills these (graspologic hierarchical_leiden + community reports).
 CREATE TABLE IF NOT EXISTS communities (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,

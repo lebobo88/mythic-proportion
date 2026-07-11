@@ -1,7 +1,20 @@
 import { useEffect, useState } from "react";
 import { Button, Input } from "../../components/ui";
-import { fetchConfig, runQuery, type QueryResponse } from "../../lib/api";
+import { fetchConfig, runQuery, type QueryMode, type QueryResponse } from "../../lib/api";
 import "./ask.css";
+
+// Phase 4 (specs/mythic-proportion-3d-graphrag.html §Phase 4): the four
+// GraphRAG query modes plus "auto" (default -- preserves the pre-Phase-4
+// answer behavior unchanged until the graph layer has data) and an explicit
+// "legacy" escape hatch.
+const QUERY_MODES: { value: QueryMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "legacy", label: "Legacy (hybrid search)" },
+  { value: "global", label: "Global (community reports)" },
+  { value: "local", label: "Local (neighborhood)" },
+  { value: "drift", label: "DRIFT (primer + follow-ups)" },
+  { value: "activation", label: "Spreading-activation" },
+];
 
 // Ask view: POST /api/query with citations + hits + an LLM-synthesis
 // toggle + a model hint -- parity target for the legacy #view-ask markup
@@ -9,6 +22,7 @@ import "./ask.css";
 export function AskView() {
   const [question, setQuestion] = useState("");
   const [useLlm, setUseLlm] = useState(true);
+  const [mode, setMode] = useState<QueryMode>("auto");
   const [answer, setAnswer] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +40,7 @@ export function AskView() {
     setLoading(true);
     setError(null);
     try {
-      const result = await runQuery(q, useLlm, 8);
+      const result = await runQuery(q, useLlm, 8, mode);
       setAnswer(result);
     } catch (err) {
       setError(`Query failed: ${String(err)}`);
@@ -59,6 +73,20 @@ export function AskView() {
           onChange={(event) => setUseLlm(event.target.checked)}
         />
         Use LLM synthesis
+      </label>
+      <label className="mp-ask-mode-select">
+        Query mode:{" "}
+        <select
+          value={mode}
+          onChange={(event) => setMode(event.target.value as QueryMode)}
+          aria-label="Query mode"
+        >
+          {QUERY_MODES.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
       </label>
       <div className="mp-ask-model-hint">{modelHint}</div>
       <div className="mp-ask-answer">

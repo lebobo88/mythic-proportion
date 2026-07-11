@@ -204,6 +204,32 @@ def index_graph(
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1) from exc
 
+        # Phase 4: recompute the whole-graph Leiden clustering + community
+        # reports on every `index-graph` run (cheap at personal-vault scale,
+        # per specs/ROADMAP-BRIEF.md §6.2) -- never blocks graph-layer sync
+        # if the optional `[graphrag]` extra (or its leidenalg fallback)
+        # isn't installed; that failure is reported, not fatal.
+        from mythic_proportion.graph.communities import compute_communities
+        from mythic_proportion.graph.reports import generate_community_reports
+
+        try:
+            community_report = compute_communities(store.conn)
+            reports_report = generate_community_reports(
+                store.conn,
+                client=client,
+                model=settings.llm_model,
+                embedder=embedder,
+                vec_active=store.vec_active,
+            )
+            console.print(
+                f"[green]Communities:[/green] {community_report.rows_written} membership row(s) "
+                f"across {community_report.levels} level(s) ({community_report.backend}); "
+                f"{reports_report.reports_written} report(s) written, "
+                f"{reports_report.llm_calls} LLM call(s)"
+            )
+        except ImportError as exc:
+            console.print(f"[yellow]Skipping community/report generation:[/yellow] {exc}")
+
     console.print(
         f"[green]Graph reindexed:[/green] +{report.text_units_added} text unit(s), "
         f"~{report.text_units_updated} updated, -{report.text_units_deleted} deleted, "
@@ -230,6 +256,14 @@ def query(
         ),
     ),
     k: int = typer.Option(8, "-k", "--k", help="Number of pages to retrieve."),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help=(
+            "Retrieval mode: auto (default, preserves legacy behavior until the "
+            "graph layer has data) | legacy | global | local | drift | activation."
+        ),
+    ),
 ) -> None:
     """Answer a question by retrieving and synthesizing from the vault."""
     root = Path(vault_path) if vault_path is not None else Path.cwd()
@@ -241,8 +275,8 @@ def query(
         raise typer.Exit(code=1)
 
     try:
-        answer = answer_query(root, question, k=k, use_llm=True)
-    except AnswerError as exc:
+        answer = answer_query(root, question, k=k, use_llm=True, mode=mode)
+    except (AnswerError, ValueError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
 

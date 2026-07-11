@@ -70,10 +70,39 @@ describe("AskView", () => {
       question: "What is the answer?",
       use_llm: true,
       k: 8,
+      mode: "auto",
     });
 
     expect(await screen.findByText("The answer is 42.")).toBeInTheDocument();
     expect(screen.getByText("notes/alpha.md")).toBeInTheDocument();
     expect(screen.getByText(/used_llm=true/)).toBeInTheDocument();
+  });
+
+  it("Phase 4: the mode dropdown selection is sent as `mode` in the request body", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        provider: "authhub",
+        model: "gpt-5",
+        authhub_base_url: "",
+        route_alias: null,
+        has_api_key: true,
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ text: "Global answer.", citations: [], hits: [], used_llm: true, error: false }),
+    });
+
+    render(<AskView />);
+    await screen.findByText("Model: gpt-5 (authhub)");
+
+    await userEvent.selectOptions(screen.getByLabelText("Query mode"), "global");
+    await userEvent.type(screen.getByLabelText("Ask a question"), "give me an overview");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [, requestInit] = fetchMock.mock.calls[1];
+    expect(JSON.parse(requestInit.body).mode).toBe("global");
   });
 });
