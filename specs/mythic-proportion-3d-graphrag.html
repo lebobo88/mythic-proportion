@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mythic Proportion — 3D GraphRAG Second Brain — implementation plan</title>
+<!--
+  FABLE-HARNESS planf3-style plan (plan-deep / Fable-5).
+  Image slots use:  <!~~ {{...IMAGE: <basename> | <subject sentence>}} ~~>
+  Run  plan-images.ps1 extract  to emit the prompt sheet; apply once PNGs exist in the sibling folder.
+  Self-contained: system fonts only, no CDNs.
+-->
+<style>
+/* ============ FABLE plan design system (planf3-style, garland squad) ============ */
+:root {
+  color-scheme: light dark;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --fs-body: 15.5px; --lh-body: 1.62;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 40px;
+  --radius: 10px; --radius-sm: 6px; --measure: 60rem;
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+  --text: #1c2530; --text-muted: #5b6673; --accent: #2f6fed; --accent-soft: #e7f0ff;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+  --st-idle-bd: #c3cad3; --st-idle-fg: #5b6673; --st-idle-bg: #eef1f4;
+  --st-wip-bd:  #d9a406; --st-wip-fg:  #7a5a00; --st-wip-bg:  #fff4d6;
+  --st-done-bd: #2f9e5b; --st-done-fg: #17663a; --st-done-bg: #dcf5e6;
+  --st-fail-bd: #d64545; --st-fail-fg: #8f2020; --st-fail-bg: #fbe0e0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1419; --surface: #161c24; --surface-2: #1d252f; --border: #2a3542;
+    --text: #e6ebf2; --text-muted: #9aa7b6; --accent: #6ea0ff; --accent-soft: #17233b;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.35);
+    --st-idle-bd:#3a4552; --st-idle-fg:#9aa7b6; --st-idle-bg:#1d252f;
+    --st-wip-bd:#8a6d12; --st-wip-fg:#f0c650; --st-wip-bg:#2a2410;
+    --st-done-bd:#2f7d4f; --st-done-fg:#7fe0a6; --st-done-bg:#122a1c;
+    --st-fail-bd:#8f3636; --st-fail-fg:#f2a5a5; --st-fail-bg:#2a1414;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0f1419; --surface:#161c24; --surface-2:#1d252f; --border:#2a3542;
+  --text:#e6ebf2; --text-muted:#9aa7b6; --accent:#6ea0ff; --accent-soft:#17233b;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 2px 6px rgba(0,0,0,.35);
+  --st-idle-bd:#3a4552;--st-idle-fg:#9aa7b6;--st-idle-bg:#1d252f;
+  --st-wip-bd:#8a6d12;--st-wip-fg:#f0c650;--st-wip-bg:#2a2410;
+  --st-done-bd:#2f7d4f;--st-done-fg:#7fe0a6;--st-done-bg:#122a1c;
+  --st-fail-bd:#8f3636;--st-fail-fg:#f2a5a5;--st-fail-bg:#2a1414;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font-sans); font-size: var(--fs-body); line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased; }
+.wrap { max-width: var(--measure); margin: 0 auto; padding: var(--sp-6) var(--sp-5) 25vh; }
+header.plan-head { border-bottom: 2px solid var(--border); padding-bottom: var(--sp-4); margin-bottom: var(--sp-5); }
+header.plan-head h1 { margin: 0 0 var(--sp-2); font-size: 1.9rem; line-height: 1.2; letter-spacing: -0.01em; }
+.subtitle { color: var(--text-muted); margin: 0; }
+h2 { font-size: 1.3rem; margin: var(--sp-6) 0 var(--sp-3); padding-bottom: var(--sp-2);
+     border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; margin: var(--sp-5) 0 var(--sp-2); }
+h4 { font-size: .95rem; margin: var(--sp-4) 0 var(--sp-1); color: var(--text-muted); }
+a { color: var(--accent); }
+code, kbd, pre { font-family: var(--font-mono); }
+pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: var(--sp-3); overflow-x: auto; font-size: .86em; }
+.legend { color: var(--text-muted); font-size: .9em; }
+details.meta, details.amend { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--sp-2) var(--sp-4); margin: var(--sp-4) 0; }
+details.meta > summary, details.amend > summary { cursor: pointer; font-weight: 600; color: var(--text-muted);
+  list-style: none; padding: var(--sp-2) 0; }
+details.meta > summary::-webkit-details-marker, details.amend > summary::-webkit-details-marker { display: none; }
+details.meta > summary::before, details.amend > summary::before { content: "▸ "; color: var(--accent); }
+details[open].meta > summary::before, details[open].amend > summary::before { content: "▾ "; }
+details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); margin: var(--sp-2) 0 0; }
+details.meta dt { color: var(--text-muted); font-family: var(--font-mono); font-size: .82em; }
+details.meta dd { margin: 0; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         box-shadow: var(--shadow); padding: var(--sp-4) var(--sp-5); margin: var(--sp-4) 0; }
+.phase > h3 { margin-top: 0; display: flex; align-items: center; gap: var(--sp-3); }
+.checklist { list-style: none; padding: 0; margin: var(--sp-3) 0; }
+.checklist li { padding: var(--sp-1) 0; display: flex; gap: var(--sp-3); align-items: baseline; }
+code.status { font-size: .78em; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--st-idle-bd); color: var(--st-idle-fg); background: var(--st-idle-bg); white-space: nowrap; }
+code.status[data-st="wip"]  { border-color: var(--st-wip-bd);  color: var(--st-wip-fg);  background: var(--st-wip-bg); }
+code.status[data-st="x"]    { border-color: var(--st-done-bd); color: var(--st-done-fg); background: var(--st-done-bg); }
+code.status[data-st="done"] { border-color: var(--st-done-bd); color: var(--st-done-fg); background: var(--st-done-bg); }
+code.status[data-st="f"]    { border-color: var(--st-fail-bd); color: var(--st-fail-fg); background: var(--st-fail-bg); }
+figure { margin: var(--sp-4) 0; border: 1px solid var(--border); border-radius: var(--radius);
+         overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
+figure img { display: block; width: 100%; height: auto; }
+figure figcaption { padding: var(--sp-3) var(--sp-4); color: var(--text-muted); font-size: .9em;
+                    border-top: 1px solid var(--border); background: var(--surface-2); }
+.fig-pending { display: grid; place-items: center; gap: var(--sp-2); aspect-ratio: 1536 / 1024; padding: var(--sp-5);
+  background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 14px, var(--surface) 14px, var(--surface) 28px);
+  color: var(--text-muted); text-align: center; }
+.fig-pending b { color: var(--text); font-weight: 600; }
+.fig-pending .hint { font-family: var(--font-mono); font-size: .8em; }
+figure:has(img) .fig-pending { display: none; }
+table { border-collapse: collapse; width: 100%; margin: var(--sp-3) 0; font-size: .92em; }
+th, td { border: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); text-align: left; vertical-align: top; }
+th { background: var(--surface-2); }
+@media print {
+  :root { --bg: #fff; --surface: #fff; --shadow: none; }
+  body { color: #000; } .wrap { padding: 0; max-width: none; }
+  details.meta, details.amend, .phase, figure { break-inside: avoid; }
+  .fig-pending { border: 1px dashed #999; }
+}
+
+/* ---- dual-source figure comparison (Gemini vs ComfyUI) ---- */
+.fig-compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); padding: var(--sp-3); }
+@media (max-width: 640px) { .fig-compare { grid-template-columns: 1fr; } }
+.fig-compare .cmp { margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface-2); }
+.fig-compare .cmp > img { display: block; width: 100%; height: auto; }
+.fig-compare .cmp > figcaption { font-family: var(--font-mono); font-size: .72em; text-align: center;
+  padding: 3px 0; color: var(--text-muted); background: var(--surface); border-top: 1px solid var(--border); }
+.fig-compare .cmp.missing { display: grid; place-items: center; aspect-ratio: 1536/1024; color: var(--text-muted);
+  font-family: var(--font-mono); font-size: .8em; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="plan-head">
+  <h1>Mythic Proportion — 3D GraphRAG Second Brain</h1>
+  <p class="subtitle">Greenfield rebuild of the LLM-Wiki second brain into a full Microsoft-GraphRAG-parity memory engine with a ~50k-node 3D interactive knowledge graph, a ground-up OKLCH design system, a local privacy layer, an agent layer, and an MCP memory server — built exclusively with FABLE-HARNESS primitives, Chrome-validated every phase, shipped as two separate public git repos.</p>
+</header>
+
+<details class="meta" open>
+  <summary>Metadata</summary>
+  <dl>
+    <dt>created</dt><dd>2026-07-11</dd>
+    <dt>modified</dt><dd>2026-07-11 (initial)</dd>
+    <dt>commits</dt><dd>— (none yet; Phase 0 mints the baseline)</dd>
+    <dt>agent</dt><dd>plan-deep (Fable-5)</dd>
+    <dt>session</dt><dd>8fea15c0-a3df-4e5e-8ea4-a5b47dc27334</dd>
+    <dt>back refs</dt><dd><code>mythic-proportion/specs/ROADMAP-BRIEF.md</code> (grounding brief + 6 cited research threads) · <code>mythic-proportion/specs/mythic-proportion.html</code> (prior build plan) · <code>mythic-proportion/…Technical Architecture Blueprint.md</code></dd>
+    <dt>forward refs</dt><dd>—</dd>
+  </dl>
+</details>
+
+<p class="legend">Status markers:
+  <code class="status">[]</code> idle ·
+  <code class="status" data-st="wip">[wip]</code> in progress ·
+  <code class="status" data-st="x">[x]</code> done ·
+  <code class="status" data-st="f">[f]</code> failed</p>
+
+<section id="purpose">
+  <h2>Purpose</h2>
+  <p>The current <code>mythic-proportion</code> app is a working, independently-verified (102 tests green) local "second brain": a Karpathy-style LLM-Wiki over Markdown + <code>[[wikilinks]]</code>, with a SQLite hybrid-search sidecar (sqlite-vec + FTS5), a six-verb CLI, and a FastAPI + vanilla-JS web UI whose graph tab is a flat 2D wikilink map. The "LLM Wiki Second Brain with 3D Interactive Knowledge Graph" blueprint describes a far more capable target: a GraphRAG memory engine (entities, relationships, claims, communities, community reports; global/local/DRIFT retrieval) rendered through a professional 3D WebGL knowledge graph, with an agent layer and an MCP interface so the brain is a memory substrate for external coding agents.</p>
+  <p>This plan closes that gap as a <b>full greenfield rebuild</b> to a course-corrected target (Vite + React + React Three Fiber on the existing Python/FastAPI core; sqlite-vec, not Neo4j/Qdrant; custom orchestration + optional PydanticAI, not LangGraph), migrating all existing data across behind an explicit behavior-parity gate, and adding a local privacy layer the blueprint never contemplated. The intended outcome: a private, offline-capable, visually premium knowledge graph that both a human and an agent can read and write — delivered incrementally, verified live in Chrome at every phase, and published as two separate public repositories.</p>
+  <figure>
+    <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/hero.png" alt="a luminous 3D knowledge-graph constellation of glowing note-nodes clustered into colored communities, a calm reading pane docked to one side, rendered as one clear &quot;second brain you can fly through&quot; metaphor" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/hero.png" alt="hero — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+    <figcaption>The end-state: a task-focused 3D knowledge graph — communities as colored constellations, the selected note's wiki page docked beside it — not a hairball, but a place you navigate.</figcaption>
+  </figure>
+</section>
+
+<section id="problem">
+  <h2>Problem</h2>
+  <p>The built app and the blueprint diverge on almost every axis above the storage line, and the current design cannot simply grow into the target:</p>
+  <ul>
+    <li><b>Knowledge model is too thin.</b> The schema is only <code>pages / pages_fts / page_vectors / meta</code>. There are no entities, typed relationships, text units, claims, communities, or community reports — so there is no semantic graph to render richly, and no GraphRAG retrieval (global/local/DRIFT, spreading-activation) is possible.</li>
+    <li><b>The graph view is a flat 2D wikilink map.</b> <code>api_graph</code> emits page-nodes and resolved-wikilink edges onto a hand-rolled 2D canvas — no 3D, no instancing/LOD, no community structure, no scale headroom.</li>
+    <li><b>The frontend cannot carry a design system.</b> 839 lines of imperative vanilla JS + 431 lines of hand-written CSS have no token layer, no component library, no build tooling — a ground-up design system is not maintainable there.</li>
+    <li><b>No privacy story.</b> Every note is sent verbatim to a cloud LLM (AuthHub→DeepSeek). For a personal second brain this is the wrong default; there is no PII redaction, no local-embedding guarantee, no fully-offline option.</li>
+    <li><b>No agent layer, no interop.</b> There is a single compile pass and a single query pass — no Extractor/Refiner/Librarian roles, and no MCP server, so no external agent can use the brain as memory.</li>
+    <li><b>No version control at all.</b> Neither <code>mythic-proportion/</code> nor the enclosing <code>FABLE-HARNESS</code> is a git repository, so there is nowhere to branch, review, or publish work.</li>
+  </ul>
+  <figure>
+    <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/problem.png" alt="labelled boxes-and-arrows of the CURRENT architecture: Markdown vault -&gt; SQLite (pages/fts/vectors only) -&gt; FastAPI -&gt; vanilla-JS SPA with a flat 2D canvas graph; a cloud LLM box with note text flowing to it unredacted; big gaps drawn where entities/claims/communities/agents/MCP/3D should be" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/problem.png" alt="problem — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+    <figcaption>Current architecture: a thin hybrid-search sidecar and a flat 2D SPA, with unredacted note text leaving for the cloud and no semantic-graph, agent, MCP, or version-control layers.</figcaption>
+  </figure>
+</section>
+
+<section id="solution">
+  <h2>Solution</h2>
+  <p>Rebuild to the course-corrected target architecture, preserving every current behavior behind a parity gate and migrating all data across. The target keeps the Python core's ethos (files-first, lazily-imported optional extras, every web route a thin wrapper over the same building blocks the CLI uses, prompted strict-JSON) while adding six new capability layers:</p>
+  <ul>
+    <li><b>GraphRAG data layer</b> — new SQLite tables (<code>entities</code>, <code>relationships</code>, <code>text_units</code>, <code>text_unit_entities</code>, <code>claims</code>, <code>communities</code>, <code>community_reports</code>) + sibling <code>vec0</code> vector tables, populated by prompted delimited-tuple extraction with an <code>llm_cache</code> for idempotent incremental indexing.</li>
+    <li><b>Retrieval engine</b> — graspologic hierarchical Leiden communities + LLM community reports; global (map-reduce), local (seed→recursive-CTE expand), DRIFT (primer→local loop), and query-aware spreading-activation traversal, all over sqlite-vec + FTS5.</li>
+    <li><b>3D frontend</b> — Vite + React + <code>r3f-forcegraph</code> layout driving a custom <code>InstancedMesh2</code> render layer (points-as-nodes, LOD, BVH frustum-cull, GPU picking) targeting ~50k nodes at 60fps, with a worker-frozen force layout, community hulls, hover/focus interactions, filters, a 2D fallback, and an accessible shadow-DOM.</li>
+    <li><b>Design system</b> — three-tier OKLCH CSS-variable tokens (incl. a <code>--graph-*</code> family read straight into <code>THREE.Color</code>), shadcn/ui components, a Cmd+K command palette spine, motion tokens, light/dark.</li>
+    <li><b>Local privacy layer</b> — Presidio + the OpenAI Privacy Filter for redact→(cloud or local)→rehydrate; <code>bge-small-en-v1.5</code> local embeddings as default; an optional fully-offline Ollama/Qwen2.5 provider selected by a per-vault <code>local: true</code> flag.</li>
+    <li><b>Agent + interop layers</b> — Extractor / Refiner / Librarian agents on a lean custom orchestrator (optional PydanticAI <code>[agents]</code> extra), and a FastMCP stdio server exposing read tools by default with opt-in transactional writes and a JSONL audit log.</li>
+  </ul>
+  <p>All of it built by FABLE-HARNESS typed producers (<code>engineer</code>, <code>designer</code>, <code>design-system-curator</code>, <code>security-reviewer</code>), confirmed by <code>verifier</code>, and validated live in Chrome each phase — never Hydra, pair-programmer, smith, or eights.</p>
+  <figure>
+    <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/solution.png" alt="target architecture visually parallel to the problem diagram: same Markdown vault -&gt; Python core (ingest/compile/index/query) -&gt; SQLite now holding entities/relationships/claims/communities/reports + vec0 tables; a privacy-redactor box between the vault and BOTH a cloud LLM and a local Ollama LLM; a retrieval engine (global/local/DRIFT/spreading-activation); a Vite+R3F 3D graph frontend; an agents box (Extractor/Refiner/Librarian); an MCP server exposed to an external coding agent" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/solution.png" alt="solution — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+    <figcaption>Target architecture: the same files-first Python core, now backing a GraphRAG store, a privacy-gated dual (cloud/local) LLM path, a hybrid retrieval engine, a 3D R3F frontend, an agent layer, and an MCP memory server.</figcaption>
+  </figure>
+</section>
+
+<section id="files">
+  <h2>Relevant files</h2>
+  <h3>Existing</h3>
+  <ul>
+    <li><code>mythic-proportion/pyproject.toml</code> — package <code>mythic-proportion</code> (module <code>mythic_proportion</code>), console script <code>mythic</code>, extras <code>ingest/embeddings/llm/authhub/watch/web/dev</code>; gains <code>graphrag/agents/privacy/local/mcp</code> extras + a <code>web/</code> frontend workspace.</li>
+    <li><code>src/mythic_proportion/index/schema.sql</code> — extended with the GraphRAG tables + <code>llm_cache</code>; existing <code>pages/pages_fts/page_vectors/meta</code> preserved.</li>
+    <li><code>src/mythic_proportion/index/{store.py,retrieve.py,embeddings.py}</code> — <code>IndexStore</code> grows GraphRAG CRUD + query modes; <code>get_embedder</code> default flips to <code>bge-small-en-v1.5</code> (HashEmbedder stays the zero-dep fallback).</li>
+    <li><code>src/mythic_proportion/compile/*</code> — compile pipeline feeds the new extraction stage; the delimited-tuple parser lives beside it.</li>
+    <li><code>src/mythic_proportion/llm/authhub.py</code> — provider layer; gains an <code>ollama.py</code> sibling and a provider selector honoring <code>local: true</code>.</li>
+    <li><code>src/mythic_proportion/web/app.py</code> — the route contract (<code>/api/pages|page|search|query|graph|ingest|upload|lint|config|models</code>) is the <b>parity gate</b>; extended, never broken; static mount now serves the Vite build.</li>
+    <li><code>src/mythic_proportion/web/static/*</code> — retired at cutover (P10), replaced by the Vite/R3F build output.</li>
+    <li><code>src/mythic_proportion/cli/app.py</code> — the six verbs (<code>init/ingest/query/lint/watch/serve</code>) are parity-locked; a seventh (<code>mcp</code>) is added in P8.</li>
+    <li><code>specs/ROADMAP-BRIEF.md</code> — the authoritative grounding brief this plan executes.</li>
+  </ul>
+  <h3>New</h3>
+  <ul>
+    <li><code>src/mythic_proportion/graph/</code> — GraphRAG package: <code>extract.py</code> (entities/relationships), <code>claims.py</code>, <code>tuples.py</code> (delimited-tuple parser + repair), <code>communities.py</code> (graspologic Leiden), <code>reports.py</code> (community-report generation), <code>query/{global,local,drift,activation}.py</code>, <code>cache.py</code> (<code>llm_cache</code>), <code>migrate.py</code> (one-shot backfill).</li>
+    <li><code>src/mythic_proportion/privacy/</code> — <code>redact.py</code> (Presidio + OpenAI-Privacy-Filter recognizer), reversible rehydrate map.</li>
+    <li><code>src/mythic_proportion/agents/</code> — <code>extractor.py</code>, <code>refiner.py</code>, <code>librarian.py</code>, shared orchestrator (optional PydanticAI binding).</li>
+    <li><code>src/mythic_proportion/mcp/</code> — FastMCP server (<code>server.py</code>), tool bindings, JSONL audit.</li>
+    <li><code>web/</code> — Vite + React + R3F frontend workspace: <code>package.json</code>, <code>vite.config.ts</code>, <code>src/tokens/</code> (OKLCH + <code>--graph-*</code>), <code>src/components/</code> (shadcn/ui), <code>src/graph/</code> (r3f-forcegraph + InstancedMesh2 + worker), <code>src/palette/</code> (Cmd+K), <code>src/views/</code> (Wiki/Search/Ask/Graph/Ingest/Lint/Settings), 2D fallback + a11y DOM. Build output lands in the package's <code>web/static/</code> served by FastAPI.</li>
+    <li><code>tools/comfy_gen.py</code> — optional localhost-only ComfyUI client (design/graph assets, plan diagrams).</li>
+    <li><code>tests/</code> — new suites for graph extraction, query modes, migration parity, privacy round-trip, MCP tools; Playwright/Chrome E2E specs per phase.</li>
+    <li><code>H:\FABLE-HARNESS\.gitignore</code> + <code>H:\FABLE-HARNESS\README.md</code> — excludes <code>mythic-proportion/</code>, links it as a sibling repo.</li>
+    <li><code>mythic-proportion/README.md</code>, <code>.gitignore</code> — repo hygiene for the standalone public repo.</li>
+  </ul>
+</section>
+
+<section id="phases">
+  <h2>Implementation phases</h2>
+
+  <!-- ===== Phase 0 ===== -->
+  <div class="phase">
+    <h3>Phase 0 — Dual-repo git + greenfield scaffold <code class="status" data-st="wip">[wip]</code></h3>
+    <p>Stand up version control and the greenfield skeleton. Two <b>separate public</b> repositories: <code>mythic-proportion/</code> and the enclosing <code>H:\FABLE-HARNESS</code>. FABLE-HARNESS <code>.gitignore</code> excludes <code>mythic-proportion/</code> so the trees never nest; a README link references it as a sibling. Scaffold the target layout (Python sub-packages + a <code>web/</code> Vite workspace served by FastAPI) on a <code>feat/3d-graphrag</code> branch off <code>mythic-proportion</code>'s <code>main</code>. Freeze the behavior-parity checklist as the acceptance contract for P2.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>git init</code> in <code>mythic-proportion/</code>; add <code>.gitignore</code> (venv, caches, <code>.coverage</code>, <code>tmpvault*</code>, <code>web/node_modules</code>, <code>web/dist</code>); commit current verified state as the baseline.</li>
+      <li><code class="status">[]</code> <code>git init</code> in <code>H:\FABLE-HARNESS</code>; add <code>.gitignore</code> excluding <code>mythic-proportion/</code>, <code>.fable/</code>, caches; add a README section linking the mythic-proportion sibling repo; commit.</li>
+      <li><code class="status">[]</code> <b>Confirm remote host + repo names with the user</b>, then create both public remotes and push each to its own <code>main</code> (outward/publishing action — gated on that confirmation).</li>
+      <li><code class="status">[]</code> Branch <code>feat/3d-graphrag</code> in mythic-proportion; all greenfield work lands here until the P10 parity merge.</li>
+      <li><code class="status">[]</code> Scaffold Python sub-packages (<code>graph/ privacy/ agents/ mcp/</code>) as empty importable modules; add new extras to <code>pyproject.toml</code> (declared now, dependencies added per-phase).</li>
+      <li><code class="status">[]</code> Scaffold the <code>web/</code> Vite + React + TypeScript workspace (React Three Fiber, drei, shadcn/ui deps); wire the build output into the FastAPI static mount; add a placeholder route that renders "hello".</li>
+      <li><code class="status">[]</code> Author <code>specs/parity-checklist.md</code>: every CLI verb, every web route, lint rules, ingest fast-path, hybrid-search behavior — the frozen contract P2 must satisfy.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>git status</code> clean in both repos; both remotes reachable; both <code>main</code> branches pushed; FABLE-HARNESS tree does not track <code>mythic-proportion/</code>.</li>
+      <li><code class="status">[]</code> <code>pip install -e '.[dev,web]'</code> succeeds; existing <code>pytest</code> (102 tests) still green on the branch.</li>
+      <li><code class="status">[]</code> <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code> succeeds; <code>mythic serve</code> serves the placeholder build.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> <code>browser-validator</code> loads <code>http://127.0.0.1:8765/</code>, confirms the scaffold renders with zero console/network errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase0.png" alt="two side-by-side repository icons (mythic-proportion and FABLE-HARNESS) each with its own main branch and a public badge, a dotted &quot;sibling link&quot; arrow between them, and a feat/3d-graphrag branch sprouting from mythic-proportion" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase0.png" alt="phase0 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Two independent public repos with a sibling link, and the greenfield feature branch where the rebuild lives.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 1 ===== -->
+  <div class="phase">
+    <h3>Phase 1 — Design-system foundation <code class="status">[]</code></h3>
+    <p>Build the ground-up design system before feature UI, so every later view consumes tokens rather than hard-coded values. Three-tier OKLCH CSS variables (primitive → semantic → component) including a dedicated <code>--graph-*</code> family that the 3D scene will read at runtime; shadcn/ui components (Base UI or Radix primitives); a Cmd+K command-palette navigation spine; motion tokens; light/dark theming. Dispatch <code>designer</code> + <code>design-system-curator</code> for the token/component specs, <code>engineer</code> to implement.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Author the token set: OKLCH color primitives, semantic tokens (<code>--color-text-*</code>, surfaces, accent), 4px spacing scale, type scale, radii, elevation, and a categorical OKLCH community ramp.</li>
+      <li><code class="status">[]</code> Define the <code>--graph-*</code> family (<code>--graph-node-&lt;type&gt;</code>, <code>--graph-edge</code>, <code>--graph-edge-active</code>, <code>--graph-community-1..N</code>, <code>--graph-hull-fill</code>, <code>--graph-glow</code>) + a runtime helper that reads them into <code>THREE.Color</code> and re-reads on theme change.</li>
+      <li><code class="status">[]</code> Motion tokens: durations (instant/fast/base/slow) + easings (standard/out/emphasized); all animation gated on <code>prefers-reduced-motion</code>.</li>
+      <li><code class="status">[]</code> Install shadcn/ui; build the app shell (header, tab nav, theme toggle, panels) + core primitives (button, input, dialog, combobox, tooltip).</li>
+      <li><code class="status">[]</code> Cmd+K command palette as the primary nav spine (fuzzy combobox: switch tab, jump-to-page, run Ask, open Ingest); keyboard-first focus order.</li>
+      <li><code class="status">[]</code> A living tokens/components preview route (<code>/#/design</code>) for visual + a11y review.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Token contrast audit: 4.5:1 body / 3:1 large+UI in both light and dark.</li>
+      <li><code class="status">[]</code> <code>npm run build</code> + typecheck clean; component unit tests pass.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> theme toggle flips light/dark with no flash; Cmd+K opens/filters/executes; keyboard-only nav reaches every control; reduced-motion honored; zero console errors.</li>
+      <li><code class="status">[]</code> <code>design-system-curator</code> sign-off that <code>--graph-*</code> tokens resolve into <code>THREE.Color</code> in a throwaway R3F cube.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase1.png" alt="a design-system board: an OKLCH color ramp, a type scale, spacing/radius chips, a Cmd+K palette mockup, and a small arrow showing a --graph-community token flowing into a glowing 3D node" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase1.png" alt="phase1 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>One token system driving both the 2D chrome and the 3D scene, with Cmd+K as the navigation spine.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 2 ===== -->
+  <div class="phase">
+    <h3>Phase 2 — Core rebuild + data migration + parity gate <code class="status">[]</code></h3>
+    <p>Re-establish the full existing feature set (ingest/compile/index/query/lint/watch/serve) on the clean greenfield structure, then migrate the existing vault + SQLite index across, and prove behavior parity against the P0 checklist before anything new is added. This is the riskiest phase of a greenfield rebuild — it exists to guarantee nothing the 102-test app does is silently lost.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Port the Python core modules into the greenfield layout; keep every public entry point (<code>ingest_drop</code>, <code>compile_source</code>, <code>IndexStore</code>/<code>hybrid_search</code>, <code>answer_query</code>, <code>lint_vault</code>/<code>lint_fix</code>) intact.</li>
+      <li><code class="status">[]</code> Re-wire the FastAPI routes as thin wrappers over those building blocks (the no-drift invariant); rebuild the seven views (Wiki/Search/Ask/Graph/Ingest/Lint/Settings) in React on the P1 design system — Graph tab temporarily uses the existing 2D data shape.</li>
+      <li><code class="status">[]</code> Migration: one-shot re-ingest/re-index of the existing vault into the new store; verify page/search/query outputs match the legacy app on a fixture vault.</li>
+      <li><code class="status">[]</code> Port the full existing test suite; add migration parity tests (legacy-vs-new outputs on fixtures).</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Every item on <code>specs/parity-checklist.md</code> passes: all 6 CLI verbs, all 10 web routes, lint rules, ingest fast-path, hybrid-search ranking.</li>
+      <li><code class="status">[]</code> <code>ruff</code> + <code>mypy</code> clean; full <code>pytest</code> (ported 102 + new migration tests) green.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> <code>browser-validator</code> drives Wiki read, Search, Ask, Ingest (drop a file), Lint — each produces the same result class as the legacy UI; zero console/network errors.</li>
+      <li><code class="status">[]</code> <code>verifier</code> re-derives parity from disk (diff outputs, test runner logs) without trusting the builder's self-report.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase2.png" alt="a before/after parity scale: the legacy vanilla-JS app on one pan and the new React app on the other, balanced level, with a checklist of CLI verbs and web routes all ticked between them" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase2.png" alt="phase2 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Parity gate: the greenfield core must do everything the verified app did — proven, not assumed — before new capability is layered on.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 3 ===== -->
+  <div class="phase">
+    <h3>Phase 3 — GraphRAG data layer <code class="status">[]</code></h3>
+    <p>Add the semantic-graph substrate. New SQLite tables coexisting with <code>pages/pages_fts/page_vectors</code>; entity/relationship/claim extraction via GraphRAG-style prompted <b>delimited tuples</b> (more drift-robust than nested JSON) with a gleaning recall loop; an <code>llm_cache</code> keyed on <code>sha256(prompt||model)</code> for idempotent, incremental re-indexing. Borrow MS GraphRAG's MIT prompt text; hand-roll the orchestration. Dispatch <code>data-modeler</code> for the schema, <code>engineer</code> for extraction, <code>security-reviewer</code> for the prompt-injection surface of ingested content.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Extend <code>schema.sql</code>: <code>entities(UNIQUE(title,type))</code>, <code>relationships(source_id,target_id,type,weight)</code> + indices, <code>text_units(page_id,chunk_index,text,content_hash)</code>, <code>text_unit_entities</code>, <code>claims</code>, <code>communities</code>, <code>community_reports</code>; sibling <code>vec0</code> tables <code>entity_vectors/report_vectors/text_unit_vectors</code> at the active embedder dim.</li>
+      <li><code class="status">[]</code> Chunk pages into text units (heading/semantic boundaries) with content hashes; embed locally into <code>text_unit_vectors</code>.</li>
+      <li><code class="status">[]</code> Extraction: adapt MS <code>extract_graph</code> + <code>summarize_descriptions</code> + <code>extract_claims</code> prompts to delimited-tuple output; parser with balanced-scan + one repair round-trip + skip-not-abort; title normalization for dedup; a constrained <code>type</code> enum.</li>
+      <li><code class="status">[]</code> <code>llm_cache</code> table + read-through wrapper on every extraction call; incremental re-index (only changed chunk hashes re-extract; ref-count entity provenance on delete).</li>
+      <li><code class="status">[]</code> Extend <code>/api/graph</code> to emit entity/relationship nodes+edges (typed, weighted) alongside the wikilink view; keep the legacy shape available.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Extraction unit tests on fixtures (deterministic mock provider): known text → expected entities/relationships/claims; parser survives malformed/fenced/truncated tuples.</li>
+      <li><code class="status">[]</code> Idempotency: re-index unchanged vault → zero new LLM calls (cache hits), stable entity IDs; change one file → only its units re-extract.</li>
+      <li><code class="status">[]</code> <code>ruff</code>/<code>mypy</code>/<code>pytest</code> green; <code>[graphrag]</code> extra imports lazily (base install unaffected).</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> Graph tab (still 2D) now shows semantic entity nodes/edges from a real ingested doc; zero console errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase3.png" alt="a markdown page fanning out into a small labelled graph of entity nodes and typed relationship edges plus claim cards, with a cache token showing &quot;hit&quot; on unchanged chunks" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase3.png" alt="phase3 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>From pages to a semantic graph: entities, typed relationships, and claims extracted via cached, incremental prompted-tuple passes.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 4 ===== -->
+  <div class="phase">
+    <h3>Phase 4 — Communities + retrieval modes <code class="status">[]</code></h3>
+    <p>Turn the graph into a retrieval engine. graspologic hierarchical Leiden clustering (pinned seed for stable IDs) into <code>communities</code>; LLM-written <code>community_reports</code> (cached by community content-hash); and the four GraphRAG query modes plus query-aware spreading-activation, all expressed over sqlite-vec + FTS5 + recursive CTEs. Wire the Ask view to choose a mode. Dispatch <code>security-reviewer</code> for the concurrency/data-integrity of graph writes during re-cluster.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>communities.py</code>: build a weighted edge-list from <code>relationships</code>, call <code>hierarchical_leiden</code>, persist <code>level/cluster/parent_cluster</code>; recompute whole-graph each index run.</li>
+      <li><code class="status">[]</code> <code>reports.py</code>: bottom-up community report generation, embedded into <code>report_vectors</code>, cached by community hash.</li>
+      <li><code class="status">[]</code> Query modes: <b>global</b> (map-reduce over reports), <b>local</b> (vec seed → recursive-CTE neighbor expand → text_units/claims/reports → token-budget rank), <b>DRIFT</b> (primer over reports → per-follow-up local loop), <b>spreading-activation</b> (weighted scored BFS: activation × <code>weight</code> × decay, FTS5∪vec seeds, threshold).</li>
+      <li><code class="status">[]</code> <code>answer_query</code> gains a <code>mode</code> parameter + auto-select heuristic; <code>/api/query</code> and the Ask view expose mode choice.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Deterministic tests: local expansion returns the correct N-hop neighborhood; spreading-activation ranks a planted multi-hop answer above a lexical distractor; global map-reduce aggregates report points.</li>
+      <li><code class="status">[]</code> Re-cluster is transactional (no torn reads under a concurrent query); stable community IDs across identical re-runs.</li>
+      <li><code class="status">[]</code> Retrieval-quality regression: new modes ≥ legacy hybrid search on a labeled fixture set.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> Ask tab returns cited answers per mode; switching modes changes retrieved context visibly; zero console errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase4.png" alt="four small panels labelled Global/Local/DRIFT/Spreading-activation, each showing the same graph lit up differently — communities as hulls for global, a neighborhood expansion for local, a primer+follow-ups tree for DRIFT, a heat-spreading BFS for activation" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase4.png" alt="phase4 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>One graph, four retrieval strategies — Leiden communities plus global/local/DRIFT/spreading-activation over sqlite-vec + FTS5.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 5 ===== -->
+  <div class="phase">
+    <h3>Phase 5 — 3D graph frontend (~50k target) <code class="status">[]</code></h3>
+    <p>The centerpiece. <code>r3f-forcegraph</code> drives the force simulation and data plumbing (R3F keeps the render loop via <code>tickFrame()</code>), but nodes render through a <b>custom <code>InstancedMesh2</code> layer</b> (points-as-nodes, LOD tiers, per-instance BVH frustum-culling, GPU picking) — designed for ~50k nodes at 60fps from day one, not retrofitted. Worker-frozen layout, batched line edges with degree-based culling, SDF labels only for hovered/selected/high-degree nodes, community hulls, hover-neighbor highlight+fade, eased camera focus, filters, progressive disclosure, a 2D fallback mode, and an accessible parallel shadow-DOM.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Integrate <code>r3f-forcegraph</code>; run <code>d3-force-3d</code> in a Web Worker; <code>warmupTicks</code> → freeze on <code>onEngineStop</code>; re-heat only on data change/drag.</li>
+      <li><code class="status">[]</code> Custom node layer on <code>@three.ez/instanced-mesh</code> (InstancedMesh2): points/quads, LOD, BVH cull; degree/centrality-scaled size; community color from <code>--graph-*</code> tokens.</li>
+      <li><code class="status">[]</code> Edges as one batched <code>LineSegments</code> with distance/degree fade + overview culling; community convex-hull volumes (low alpha, few).</li>
+      <li><code class="status">[]</code> Picking via GPU pick buffer on throttled pointer events (never per-frame raycast); hover → raise node+1-hop+edges, fade rest to ~0.1; click → eased camera focus (emphasized easing) + docked reading pane loads the node's page.</li>
+      <li><code class="status">[]</code> Filters (type/tag/time/community); progressive disclosure (start 20–50 nodes, expand on demand); Cmd+K jump-to-node refocuses the graph.</li>
+      <li><code class="status">[]</code> 2D fallback mode + a11y: visually-hidden keyboard-navigable node/neighbor tree + links data-table mirroring the graph, announced selection; honor reduced-motion.</li>
+      <li><code class="status">[]</code> Never <code>setState</code> in <code>useFrame</code> (mutate matrices/uniforms via refs); lazy-load the graph route; <code>PerformanceMonitor</code>-driven adaptive DPR.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Synthetic-graph perf harness (10k and ~50k nodes): sustained ≥60fps (10k) / interactive (~50k with points+culling) on the target mid GPU, measured via <code>r3f-perf</code>/PerformanceMonitor.</li>
+      <li><code class="status">[]</code> Interaction correctness: hover highlight, click-focus, filter, expand, Cmd+K jump, 2D toggle all behave; no <code>setState</code>-in-loop regressions.</li>
+      <li><code class="status">[]</code> a11y: keyboard reaches/selects nodes via the shadow-DOM; screen-reader announces selection; reduced-motion disables auto-animation.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> <code>browser-validator</code> + <code>visual-regression-runner</code> drive the graph at scale, capture FPS + before/after frames, confirm zero console/WebGL errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase5.png" alt="a dense but legible 3D force graph of ~50k glowing points grouped into colored community hulls, one node hover-highlighted with its neighbors lit and the rest dimmed, a reading pane docked at right, an FPS meter reading 60" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase5.png" alt="phase5 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>The 3D graph: 50k instanced points, community hulls, hover-neighborhood focus, and a docked reading pane — 60fps, not a hairball.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 6 ===== -->
+  <div class="phase">
+    <h3>Phase 6 — Local privacy layer <code class="status">[]</code></h3>
+    <p>Make privacy the default for a personal second brain. Redact PII locally <i>before</i> any content reaches a cloud LLM (Microsoft Presidio as the framework, the OpenAI Privacy Filter wired as a custom recognizer), rehydrate PII into responses via Presidio's reversible map; flip default embeddings to local <code>bge-small-en-v1.5</code> (keep HashEmbedder fallback); add an optional fully-offline Ollama/Qwen2.5 provider selected by a per-vault <code>local: true</code> flag. Dispatch <code>security-reviewer</code> + <code>ai-controls-author</code> for the data-classification and redaction-completeness review.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>privacy/redact.py</code>: Presidio analyzer+anonymizer, OpenAI-Privacy-Filter recognizer, reversible rehydrate map; a redact→LLM→rehydrate wrapper around the provider layer. <code>[privacy]</code> extra (lazy torch/presidio).</li>
+      <li><code class="status">[]</code> Default embedder → <code>bge-small-en-v1.5</code> via fastembed (<code>[embeddings]</code>); chunks never leave the machine; re-embed migration.</li>
+      <li><code class="status">[]</code> <code>llm/ollama.py</code>: OpenAI-compatible client at <code>localhost:11434</code>, Ollama structured-outputs (<code>format</code>=JSON Schema) for guaranteed-valid extraction JSON; <code>[local]</code> extra.</li>
+      <li><code class="status">[]</code> Provider selector: per-vault <code>local: true</code> routes compile/query/extraction entirely to Ollama (never cloud); Settings view exposes provider, model, redaction on/off, local mode.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Redaction round-trip: seeded PII (emails/phones/names/secrets) is masked before the (mock) cloud call and correctly rehydrated in the answer; no raw PII in the outbound payload (asserted on captured request).</li>
+      <li><code class="status">[]</code> <code>local: true</code> path makes zero network calls to any non-localhost host (asserted); extraction still yields valid tuples/JSON via Ollama structured outputs.</li>
+      <li><code class="status">[]</code> Embeddings default is local; base install (no extras) still imports and runs BM25-only.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> Settings toggles provider/local/redaction; an Ask with redaction on returns a coherent, PII-free-in-transit answer; zero console errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase6.png" alt="a note passing through a local &quot;redactor&quot; filter that blacks out PII tokens, then forking to either a cloud LLM or a local Ollama LLM, then a rehydrator restoring the PII into the answer; embeddings shown staying on-device" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase6.png" alt="phase6 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Privacy by default: local PII redaction and rehydration around a dual cloud/local LLM path, with embeddings computed on-device.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 7 ===== -->
+  <div class="phase">
+    <h3>Phase 7 — Agent layer (Extractor / Refiner / Librarian) <code class="status">[]</code></h3>
+    <p>Formalize the three GraphRAG agent roles on a lean custom orchestrator (LangGraph deliberately skipped for core per research §6.4; optional PydanticAI <code>[agents]</code> extra for typed I/O + usage caps). Extractor ingests changed pages → graph upserts (reusing P3); Refiner runs a maintenance loop (dedup near-duplicate entities, normalize relationship types/weights, re-summarize) with a SQLite-backed resumable cursor; Librarian orchestrates hybrid retrieval mode-selection (reusing P4) and assembles ranked context bundles.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>agents/extractor.py</code> — thin role over P3 extraction, triggered by ingest/watch.</li>
+      <li><code class="status">[]</code> <code>agents/refiner.py</code> — maintenance loop: entity dedup (title similarity + shared neighbors), relationship normalization, community/report refresh; SQLite work-queue + cursor for resume; a confirmation gate before destructive merges.</li>
+      <li><code class="status">[]</code> <code>agents/librarian.py</code> — mode-selection + context-bundle assembly (community → entities → text units → claims ordering) over P4.</li>
+      <li><code class="status">[]</code> Optional PydanticAI binding behind <code>[agents]</code>; surface Refiner status + pending merges in the UI.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Refiner dedup merges a planted near-duplicate pair and preserves detail; the confirmation gate blocks unconfirmed merges; the loop resumes from its cursor after an interrupt.</li>
+      <li><code class="status">[]</code> Librarian selects the expected mode per query class and emits a correctly-ordered bundle within the token budget.</li>
+      <li><code class="status">[]</code> <code>ruff</code>/<code>mypy</code>/<code>pytest</code> green; base install works without <code>[agents]</code>.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> Refiner maintenance surfaced in the UI (pending merges list, run/confirm); zero console errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase7.png" alt="three labelled agent figures — Extractor feeding the graph, Refiner tidying/merging duplicate nodes with a human-confirm gate, Librarian assembling a ranked context bundle — around the central knowledge graph" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase7.png" alt="phase7 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Three roles keeping the graph fed, coherent, and queryable — on a lean custom orchestrator, not a heavyweight framework.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 8 ===== -->
+  <div class="phase">
+    <h3>Phase 8 — MCP memory server <code class="status">[]</code></h3>
+    <p>Expose the brain as a memory substrate for external coding agents (a <b>product</b> feature of mythic-proportion — it does not violate the harness's own N8, which governs how the harness operates, not what this app ships). FastMCP over stdio; read tools always on; writes behind an explicit <code>--read-write</code> opt-in with transactional SQLite, schema-as-defense, per-tool rate/fan-out limits, and a JSONL audit log. Add a <code>mythic mcp</code> CLI verb. Dispatch <code>security-reviewer</code> (this is the security-keyword-flagged surface) + <code>api-designer</code> for the tool contracts.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>mcp/server.py</code> (FastMCP): read tools <code>search_graph</code>, <code>get_context_bundle(entity_id, depth)</code>, <code>search_text_units</code>; write tools <code>upsert_entity</code>, <code>add_text_unit</code> (transactional, idempotent). <code>[mcp]</code> extra.</li>
+      <li><code class="status">[]</code> Security: <code>--read-only</code> default (writes unregistered), enum/branded-ID schemas, URL allow-lists, lower write rate limits, JSONL audit (tool, args-hash, ts, outcome).</li>
+      <li><code class="status">[]</code> <code>mythic mcp</code> CLI verb (stdio; optional streamable-HTTP flag); document <code>claude mcp add --transport stdio mythic -- python -m mythic_proportion.mcp --scope project</code>.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Tool contract tests: reads return correct shapes; writes are transactional (partial failure rolls back); read-only mode rejects writes; rate limits fire.</li>
+      <li><code class="status">[]</code> Audit log records every call; schema validation rejects malformed args.</li>
+      <li><code class="status">[]</code> <b>Live validation:</b> register the stdio server with a real Claude Code client (<code>claude mcp add</code>) and exercise a read + a gated write end-to-end.</li>
+      <li><code class="status">[]</code> <code>security-reviewer</code> sign-off on the read/write boundary; <code>verifier</code> confirms from the audit log.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase8.png" alt="an external coding-agent icon connecting over an MCP stdio pipe to the mythic brain, pulling context (read) and pushing a gated, audited write, with a read-only padlock and a JSONL audit scroll" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase8.png" alt="phase8 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>The brain as shared memory: FastMCP stdio, read-by-default, audited opt-in writes.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 9 ===== -->
+  <div class="phase">
+    <h3>Phase 9 — ComfyUI asset pipeline (optional) <code class="status">[]</code></h3>
+    <p>Wire the local ComfyUI at <code>H:\LocalAI</code> to generate design + graph-visual assets (node/edge glyph textures, particle sprites, moodboards, and this plan's own figure PNGs) with no cloud spend. A small, optional, localhost-only helper that no-ops gracefully when the server is down.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Verify the install: probe <code>GET http://127.0.0.1:8188/system_stats</code> + <code>/object_info</code>; confirm SDXL/Flux checkpoints and (optionally) LayerDiffuse / seamless-tiling / rembg nodes under <code>H:\LocalAI</code>.</li>
+      <li><code class="status">[]</code> <code>tools/comfy_gen.py</code> (~80 LOC, stdlib <code>urllib</code> + <code>websocket-client</code>): load an API-format workflow template with <code>{{PLACEHOLDER}}</code> slots → POST <code>/prompt</code> → await <code>/ws</code> → pull <code>/view</code> → save into <code>design-assets/&lt;category&gt;/</code>; no-op if unreachable.</li>
+      <li><code class="status">[]</code> Generate the design-system moodboards + graph node/edge textures; optionally the plan's figure PNGs (feed <code>plan-images.ps1 extract</code> output as prompts).</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Helper is a clean no-op (logged) when ComfyUI is offline — never blocks a build.</li>
+      <li><code class="status">[]</code> When online: a parameterized prompt produces a transparent-PNG asset saved to the right folder; no non-localhost network calls.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> a generated node texture renders correctly in the 3D graph; zero console errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase9.png" alt="a local ComfyUI node-graph on one side feeding transparent glyph/texture PNGs into the mythic design-assets folder and onto glowing graph nodes on the other side, a &quot;localhost only, no cloud&quot; badge" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase9.png" alt="phase9 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Local, no-cloud asset generation for the design system and the graph's own textures.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 10 ===== -->
+  <div class="phase">
+    <h3>Phase 10 — Cutover, merge, publish <code class="status">[]</code></h3>
+    <p>Retire the legacy tree only after the full parity checklist and every phase's Chrome validation pass. Merge <code>feat/3d-graphrag</code> → <code>main</code>, tag a release, push both public repos, and finalize docs. This is the final gate; nothing is "done" until the global validation section below is all <code class="status" data-st="x">[x]</code>.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Remove the retired vanilla-JS <code>web/static/*</code> and any dead legacy modules; confirm nothing else imports them.</li>
+      <li><code class="status">[]</code> Update <code>README.md</code> (both repos), <code>docs/</code>, and the FABLE-HARNESS sibling link; bump version; write the changelog (via <code>docs-author</code>).</li>
+      <li><code class="status">[]</code> Merge the feature branch to <code>main</code>; tag; <b>push both repos to their public remotes</b> (confirm with the user immediately before the push).</li>
+      <li><code class="status">[]</code> Run the missability/completion checklist; <code>run-finalizer</code>-style summary.</li>
+    </ul>
+    <h4>Testing strategy — loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Full global validation (below) green; parity checklist 100% satisfied.</li>
+      <li><code class="status">[]</code> <b>Chrome validation:</b> a full end-to-end pass across all views on the merged <code>main</code> build; zero console/network errors.</li>
+      <li><code class="status">[]</code> <code>verifier</code> re-derives the release state from disk (git log, test logs, build artifacts) independent of any builder self-report.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase
+      <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/phase10.png" alt="the feat/3d-graphrag branch merging into main with a version tag, two public repos pushed (green check badges), and the legacy 2D UI fading out as the 3D app takes over" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/phase10.png" alt="phase10 — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+      <figcaption>Cutover: parity proven, legacy retired, feature branch merged, both public repos published.</figcaption>
+    </figure>
+  </div>
+
+</section>
+
+<section id="validation">
+  <h2>Global validation commands — final gate (run after all phases show [x])</h2>
+  <ul class="checklist">
+    <li><code class="status">[]</code> <code>cd mythic-proportion &amp;&amp; ruff check . &amp;&amp; mypy</code> — lint + typecheck clean (Python).</li>
+    <li><code class="status">[]</code> <code>pytest</code> — full suite (ported 102 + all new: extraction, query modes, migration parity, privacy round-trip, agents, MCP tools) green.</li>
+    <li><code class="status">[]</code> <code>cd web &amp;&amp; npm run typecheck &amp;&amp; npm run build &amp;&amp; npm test</code> — frontend typecheck, production build, component tests.</li>
+    <li><code class="status">[]</code> Playwright/Chrome E2E across all seven views + the 3D graph at 10k and ~50k nodes — zero console/network/WebGL errors, FPS budget met.</li>
+    <li><code class="status">[]</code> <code>specs/parity-checklist.md</code> — every legacy behavior satisfied on the greenfield build.</li>
+    <li><code class="status">[]</code> Privacy assertion: outbound cloud payloads contain no raw PII; <code>local: true</code> makes zero non-localhost calls.</li>
+    <li><code class="status">[]</code> MCP: <code>claude mcp add</code> registration + a read and a gated write exercised end-to-end; audit log intact.</li>
+    <li><code class="status">[]</code> Base install (no extras) still imports and runs BM25-only; each extra imports lazily.</li>
+    <li><code class="status">[]</code> Both repos: <code>git status</code> clean, <code>main</code> pushed, FABLE-HARNESS does not track <code>mythic-proportion/</code>.</li>
+  </ul>
+  <p class="legend">Same loop discipline as per-phase checks: nothing is done until every command here passes.</p>
+</section>
+
+<section id="questionables">
+  <h2>Questionables</h2>
+  <ul>
+    <li><b>Assumption:</b> Delivery is a full greenfield rebuild (not incremental strangler). — <b>Why it matters:</b> reshapes every phase and adds the P2 migration/parity gate. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (user, 2026-07-11).</li>
+    <li><b>Assumption:</b> "Greenfield to the blueprint" means the <i>course-corrected</i> target (Vite/R3F, sqlite-vec, no Neo4j/Qdrant/LangGraph), not the blueprint's literal stack. — <b>Why it matters:</b> a literal reading would undo the §3/§7 decisions. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed in brief §3.4; flagged to user. Reopen if the literal blueprint stack was actually intended.</li>
+    <li><b>Assumption:</b> Graph performance target is ~50k nodes @ 60fps (points+LOD+BVH-cull+GPU-pick from day one). — <b>Why it matters:</b> sets the entire P5 rendering strategy. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (user, 2026-07-11).</li>
+    <li><b>Assumption:</b> Two <i>separate public</i> repos; pushing is an outward action the engineer performs in P0/P10 only after confirming remote host + names. — <b>Why it matters:</b> publishing is hard to reverse. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (user, 2026-07-11); remote host/names still <code class="status">[]</code> open (ask at P0).</li>
+    <li><b>Assumption:</b> LangGraph skipped for core; optional PydanticAI <code>[agents]</code> extra only. — <b>Why it matters:</b> dependency weight + lock-in vs. the lean ethos. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (research §6.4 + user workstream selection).</li>
+    <li><b>Assumption:</b> MCP is read-only by default with opt-in transactional writes, stdio-first. — <b>Why it matters:</b> external-agent write safety. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (research §6.4).</li>
+    <li><b>Assumption:</b> The optional Ollama <code>local: true</code> provider ships in P6 as opt-in (cloud DeepSeek remains the default provider). — <b>Why it matters:</b> whether "fully offline" is a launch guarantee or a selectable mode. — <b>Resolved:</b> <code class="status">[]</code> open — confirm at P6.</li>
+    <li><b>Assumption:</b> Data migration covers the real vault only; <code>tmpvault/</code> and <code>tmpvault2/</code> are scratch and excluded/gitignored. — <b>Why it matters:</b> migration scope + repo hygiene. — <b>Resolved:</b> <code class="status">[]</code> open — confirm at P2.</li>
+    <li><b>Assumption:</b> Repo layout stays a single Python package (<code>mythic_proportion</code> with sub-modules) + a sibling <code>web/</code> workspace, not a multi-package monorepo. — <b>Why it matters:</b> packaging + import ergonomics. — <b>Resolved:</b> <code class="status" data-st="x">[x]</code> decided (keeps the current package/console-script/test layout intact; revisit only if a second distributable emerges).</li>
+  </ul>
+</section>
+
+<section id="notes">
+  <h2>Notes</h2>
+  <p><b>Governance / build discipline.</b> Every phase is built by FABLE-HARNESS typed producers only — <code>engineer</code> writes code, <code>designer</code>/<code>design-system-curator</code> own UX, <code>data-modeler</code> the schema, <code>security-reviewer</code>/<code>ai-controls-author</code> the trust surfaces, <code>api-designer</code> the contracts, <code>docs-author</code> the docs — with <code>verifier</code> independently confirming from disk and <code>browser-validator</code>/<code>visual-regression-runner</code> driving live Chrome. Reflexion ×1 per failing stage; escalate after 3 loops (N3). No Hydra, pair-programmer, smith, or eights (session constraint + project memory). Fable-5 (this plan) is planning only (N2) — never the build.</p>
+  <p><b>Course-corrections vs. the blueprint (carried from brief §7):</b> Next.js → Vite+R3F served by FastAPI; <code>3d-force-graph</code> → <code>r3f-forcegraph</code> + own InstancedMesh2; Qdrant/FAISS → sqlite-vec; Neo4j dropped; LangChain/LangGraph → custom + optional PydanticAI; MCP kept as a read-first product feature. New vs. blueprint: the entire privacy layer (P6).</p>
+  <p><b>Research provenance.</b> Each capability rests on a cited research thread in <code>specs/ROADMAP-BRIEF.md</code> §6: privacy/embeddings/local-LLM (§6.1), GraphRAG-on-SQLite incl. schema/Leiden/query-modes/incremental (§6.2), 3D rendering at scale (§6.3), LangGraph+MCP (§6.4), ComfyUI automation (§6.5), design system (§6.6). Confidence note: the OpenAI Privacy Filter announcement page 403'd during research — its release-date/benchmark claims are corroborated via GitHub/HF + secondary coverage; validate the exact model card at P6.</p>
+  <p><b>Sequencing rationale.</b> Design system (P1) precedes feature UI so nothing hard-codes style. Parity (P2) precedes new capability so the greenfield never regresses. Data layer (P3) precedes retrieval (P4) precedes the 3D view (P5) because each consumes the prior. Privacy (P6) can land any time after P2 but sits before the agent layer (P7) so agents inherit redaction. MCP (P8) is last of the core layers because it exposes everything beneath it. ComfyUI (P9) is optional and parallelizable. Cutover (P10) is the single retirement gate.</p>
+  <figure>
+    <div class="fig-compare"><figure class="cmp"><img src="mythic-proportion-3d-graphrag/notes.png" alt="a phase dependency matrix / DAG: P0 scaffold -&gt; P1 design-system and P2 parity; P2 -&gt; P3 data -&gt; P4 retrieval -&gt; P5 3D; P2 -&gt; P6 privacy -&gt; P7 agents; everything -&gt; P8 MCP; P9 ComfyUI off to the side; all converging on P10 cutover" loading="lazy"><figcaption>Gemini</figcaption></figure><figure class="cmp"><img src="mythic-proportion-3d-graphrag/comfyui/notes.png" alt="notes — ComfyUI local SDXL" loading="lazy"><figcaption>ComfyUI · local SDXL</figcaption></figure></div>
+    <figcaption>Phase dependency graph — what must precede what, and why each layer consumes the one below it.</figcaption>
+  </figure>
+</section>
+
+<section id="amendments">
+  <h2>Amendments</h2>
+  <details class="amend">
+    <summary>— no amendments yet</summary>
+    <p>Append-only post-execution change history (newest at the bottom). Never rewrite history — only add.</p>
+  </details>
+</section>
+
+</div>
+</body>
+</html>
+

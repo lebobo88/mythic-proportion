@@ -1,0 +1,40 @@
+# Vault data (user content, never committed)
+*/drop/
+*/raw/
+*/.index/
+*/.vault-meta/
+*.mythic.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.*
+*.key
+
+# Local dev scratch trees
+tmpvault/
+tmpvault2/
+playground/
+
+# Web workspace (Vite/React/TS)
+web/node_modules/
+web/dist/
+
+# Fable harness per-run state (not part of this repo)
+.fable/

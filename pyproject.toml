@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mythic-proportion"
+version = "0.1.0"
+description = "An LLM-Wiki second brain with an auto-ingesting drop folder."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mythic Proportion contributors" }]
+
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "rich",
+]
+
+[project.optional-dependencies]
+ingest = ["docling", "markitdown"]
+embeddings = ["fastembed"]
+llm = ["anthropic>=0.40"]
+authhub = ["httpx"]
+watch = ["watchdog"]
+web = ["fastapi", "uvicorn"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "httpx"]
+
+[project.scripts]
+mythic = "mythic_proportion.cli.app:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"mythic_proportion.index" = ["schema.sql"]
+"mythic_proportion.web" = ["static/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["mythic_proportion"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

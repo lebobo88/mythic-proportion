@@ -1,0 +1,427 @@
+﻿<!doctype html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mythic Proportion â€” implementation plan</title>
+<!--
+  FABLE-HARNESS planf3-style plan (plan-deep / Fable-5).
+  Image slots:  <!~~ {{...IMAGE: <basename> | <subject>}} ~~>  (see .claude/skills/lib/README.md)
+  Extract prompts:  pwsh .claude/skills/lib/plan-images.ps1 extract mythic-proportion/specs/mythic-proportion.html
+  Apply once PNGs exist in the sibling mythic-proportion/ folder.
+-->
+<style>
+:root {
+  color-scheme: light dark;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --fs-body: 15.5px; --lh-body: 1.62;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 40px;
+  --radius: 10px; --radius-sm: 6px; --measure: 60rem;
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dfe3e8;
+  --text: #1c2530; --text-muted: #5b6673; --accent: #2f6fed; --accent-soft: #e7f0ff;
+  --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+  --st-idle-bd: #c3cad3; --st-idle-fg: #5b6673; --st-idle-bg: #eef1f4;
+  --st-wip-bd:  #d9a406; --st-wip-fg:  #7a5a00; --st-wip-bg:  #fff4d6;
+  --st-done-bd: #2f9e5b; --st-done-fg: #17663a; --st-done-bg: #dcf5e6;
+  --st-fail-bd: #d64545; --st-fail-fg: #8f2020; --st-fail-bg: #fbe0e0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1419; --surface: #161c24; --surface-2: #1d252f; --border: #2a3542;
+    --text: #e6ebf2; --text-muted: #9aa7b6; --accent: #6ea0ff; --accent-soft: #17233b;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.35);
+    --st-idle-bd:#3a4552; --st-idle-fg:#9aa7b6; --st-idle-bg:#1d252f;
+    --st-wip-bd:#8a6d12; --st-wip-fg:#f0c650; --st-wip-bg:#2a2410;
+    --st-done-bd:#2f7d4f; --st-done-fg:#7fe0a6; --st-done-bg:#122a1c;
+    --st-fail-bd:#8f3636; --st-fail-fg:#f2a5a5; --st-fail-bg:#2a1414;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#0f1419; --surface:#161c24; --surface-2:#1d252f; --border:#2a3542;
+  --text:#e6ebf2; --text-muted:#9aa7b6; --accent:#6ea0ff; --accent-soft:#17233b;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 2px 6px rgba(0,0,0,.35);
+  --st-idle-bd:#3a4552;--st-idle-fg:#9aa7b6;--st-idle-bg:#1d252f;
+  --st-wip-bd:#8a6d12;--st-wip-fg:#f0c650;--st-wip-bg:#2a2410;
+  --st-done-bd:#2f7d4f;--st-done-fg:#7fe0a6;--st-done-bg:#122a1c;
+  --st-fail-bd:#8f3636;--st-fail-fg:#f2a5a5;--st-fail-bg:#2a1414;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font-sans); font-size: var(--fs-body); line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased; }
+.wrap { max-width: var(--measure); margin: 0 auto; padding: var(--sp-6) var(--sp-5) 25vh; }
+header.plan-head { border-bottom: 2px solid var(--border); padding-bottom: var(--sp-4); margin-bottom: var(--sp-5); }
+header.plan-head h1 { margin: 0 0 var(--sp-2); font-size: 1.9rem; line-height: 1.2; letter-spacing: -0.01em; }
+.subtitle { color: var(--text-muted); margin: 0; }
+h2 { font-size: 1.3rem; margin: var(--sp-6) 0 var(--sp-3); padding-bottom: var(--sp-2);
+     border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; margin: var(--sp-5) 0 var(--sp-2); }
+h4 { font-size: .95rem; margin: var(--sp-4) 0 var(--sp-1); color: var(--text-muted); }
+a { color: var(--accent); }
+code, kbd, pre { font-family: var(--font-mono); }
+pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: var(--sp-3); overflow-x: auto; font-size: .86em; }
+.legend { color: var(--text-muted); font-size: .9em; }
+details.meta, details.amend { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: var(--sp-2) var(--sp-4); margin: var(--sp-4) 0; }
+details.meta > summary, details.amend > summary { cursor: pointer; font-weight: 600; color: var(--text-muted);
+  list-style: none; padding: var(--sp-2) 0; }
+details.meta > summary::-webkit-details-marker, details.amend > summary::-webkit-details-marker { display: none; }
+details.meta > summary::before, details.amend > summary::before { content: "\25B8 "; color: var(--accent); }
+details[open].meta > summary::before, details[open].amend > summary::before { content: "\25BE "; }
+details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); margin: var(--sp-2) 0 0; }
+details.meta dt { color: var(--text-muted); font-family: var(--font-mono); font-size: .82em; }
+details.meta dd { margin: 0; }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+         box-shadow: var(--shadow); padding: var(--sp-4) var(--sp-5); margin: var(--sp-4) 0; }
+.phase > h3 { margin-top: 0; display: flex; align-items: center; gap: var(--sp-3); }
+.checklist { list-style: none; padding: 0; margin: var(--sp-3) 0; }
+.checklist li { padding: var(--sp-1) 0; display: flex; gap: var(--sp-3); align-items: baseline; }
+code.status { font-size: .78em; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--st-idle-bd); color: var(--st-idle-fg); background: var(--st-idle-bg); white-space: nowrap; }
+code.status[data-st="wip"]  { border-color: var(--st-wip-bd);  color: var(--st-wip-fg);  background: var(--st-wip-bg); }
+code.status[data-st="x"]    { border-color: var(--st-done-bd); color: var(--st-done-fg); background: var(--st-done-bg); }
+code.status[data-st="done"] { border-color: var(--st-done-bd); color: var(--st-done-fg); background: var(--st-done-bg); }
+code.status[data-st="f"]    { border-color: var(--st-fail-bd); color: var(--st-fail-fg); background: var(--st-fail-bg); }
+figure { margin: var(--sp-4) 0; border: 1px solid var(--border); border-radius: var(--radius);
+         overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
+figure img { display: block; width: 100%; height: auto; }
+figure figcaption { padding: var(--sp-3) var(--sp-4); color: var(--text-muted); font-size: .9em;
+                    border-top: 1px solid var(--border); background: var(--surface-2); }
+.fig-pending { display: grid; place-items: center; gap: var(--sp-2); aspect-ratio: 1536 / 1024; padding: var(--sp-5);
+  background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 14px, var(--surface) 14px, var(--surface) 28px);
+  color: var(--text-muted); text-align: center; }
+.fig-pending b { color: var(--text); font-weight: 600; }
+.fig-pending .hint { font-family: var(--font-mono); font-size: .8em; }
+figure:has(img) .fig-pending { display: none; }
+table.grid { border-collapse: collapse; width: 100%; margin: var(--sp-3) 0; font-size: .92em; }
+table.grid th, table.grid td { border: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); text-align: left; vertical-align: top; }
+table.grid th { background: var(--surface-2); font-weight: 600; }
+.tag { display:inline-block; font-family: var(--font-mono); font-size:.78em; padding:1px 7px; border-radius:999px;
+  border:1px solid var(--border); background: var(--accent-soft); color: var(--accent); white-space:nowrap; }
+@media print {
+  :root { --bg: #fff; --surface: #fff; --shadow: none; }
+  body { color: #000; } .wrap { padding: 0; max-width: none; }
+  details.meta, details.amend, .phase, figure { break-inside: avoid; }
+  .fig-pending { border: 1px dashed #999; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="plan-head">
+  <h1>Mythic Proportion â€” an LLM-Wiki second brain with an auto-ingesting drop folder</h1>
+  <p class="subtitle">Drop any document, image, or artifact into one folder; an LLM compiles it into a persistent, self-linking Markdown knowledge graph you own â€” searchable, Obsidian-compatible, and harness-aware.</p>
+</header>
+
+<details class="meta" open>
+  <summary>Metadata</summary>
+  <dl>
+    <dt>created</dt><dd>2026-07-11</dd>
+    <dt>modified</dt><dd>2026-07-11 â€” initial authoring</dd><dd>2026-07-11 - built &amp; verified: all 6 phases complete, 102 tests pass, ruff/mypy clean, independent verifier verdict = pass</dd>
+    <dt>commits</dt><dd>â€”</dd>
+    <dt>agent</dt><dd>plan-deep (Fable-5)</dd>
+    <dt>session</dt><dd>074a0f0c-1a0a-4098-9b14-31368735918e</dd>
+    <dt>back refs</dt><dd>â€”</dd>
+    <dt>forward refs</dt><dd>â€”</dd>
+  </dl>
+</details>
+
+<p class="legend">Status markers:
+  <code class="status">[]</code> idle Â·
+  <code class="status" data-st="wip">[wip]</code> in progress Â·
+  <code class="status" data-st="x">[x]</code> done Â·
+  <code class="status" data-st="f">[f]</code> failed</p>
+
+<section id="purpose">
+  <h2>Purpose</h2>
+  <p><b>Mythic Proportion</b> is a standalone local app (project folder <code>mythic-proportion/</code>) that gives the FABLE-HARNESS ecosystem â€” and its operator â€” a <b>compounding "second brain."</b> It implements Andrej Karpathy's <b>LLM-Wiki</b> pattern (published April 2026): instead of stateless RAG that re-discovers everything from raw chunks on every query, an LLM <em>incrementally compiles and maintains</em> a persistent wiki of Markdown pages that <em>accumulates</em> knowledge and cross-references over time. Knowledge <em>compounds</em>.</p>
+  <p>The headline feature is a <b>drop folder</b>: put a PDF, a screenshot, a DOCX, a code artifact, or a harness run's output into <code>vault/drop/</code>, and the system parses it, moves the immutable original into <code>vault/raw/</code>, and asks Claude to compile it into 8â€“15 interlinked wiki pages (source summaries, entity pages, concept pages) woven into one growing knowledge graph via <b>[[wikilinks]]</b>. The graph <em>is</em> the wikilinks â€” human-readable, portable, and openable in Obsidian with zero lock-in. A SQLite sidecar (<code>sqlite-vec</code> + FTS5) provides fast hybrid (BM25 + vector) retrieval on top.</p>
+  <p><b>Design ethos:</b> <em>ease of use and simplicity</em> at the surface (five commands: <code>init / ingest / query / lint / watch</code>) with <em>comprehensive, robust</em> internals (typed pipeline, content-hash dedup, conflict resolution, incremental indexing, advisory file locking, graceful zero-API degradation).</p>
+  <figure>
+    <img src="mythic-proportion/hero.png" alt="a single funnel where mixed documents images and artifacts drop in at the top and emerge at the bottom as a glowing interconnected constellation of linked wiki note cards, the drop-folder-to-knowledge-graph metaphor">
+    <div class="fig-pending"><b>Image pending</b><span class="hint">hero.png â€” see mythic-proportion.image-prompts.md</span></div>
+    <figcaption>The core metaphor: a single drop folder funnels heterogeneous sources into one compounding, self-linking knowledge constellation.</figcaption>
+  </figure>
+</section>
+
+<section id="problem">
+  <h2>Problem</h2>
+  <p>Knowledge produced by and around the harness is <b>scattered and stateless</b>. Run artifacts land in <code>.fable/</code>, decisions in <code>memory/</code>, specs in <code>specs/</code>, plus the operator's own PDFs, screenshots, and notes live elsewhere entirely. Three concrete pains:</p>
+  <ul>
+    <li><b>No compounding.</b> Classic RAG re-embeds and re-retrieves raw chunks per query. Nothing is <em>synthesised</em> once and reused; the same cross-referencing work is redone every time, and contradictions across sources are never reconciled.</li>
+    <li><b>High-friction capture.</b> Getting a document "into" a knowledge system usually means manual tagging, filing, and linking â€” the exact bookkeeping humans are worst at and abandon.</li>
+    <li><b>Lock-in and opacity.</b> Hosted "second brain" apps trap notes in proprietary stores; graph DBs like KÃ¹zu (archived after Apple's Oct-2025 acquisition) become maintenance dead-ends. The knowledge should be plain files the user owns forever.</li>
+  </ul>
+  <figure>
+    <img src="mythic-proportion/problem.png" alt="scattered disconnected islands of documents labelled fable-artifacts, memory-decisions, specs, user-PDFs, screenshots, drifting apart with broken dashed lines and question-mark gaps between them, cold muted palette">
+    <div class="fig-pending"><b>Image pending</b><span class="hint">problem.png â€” see prompt sheet</span></div>
+    <figcaption>Today: disconnected islands of knowledge, no synthesis, high capture friction, and format lock-in.</figcaption>
+  </figure>
+</section>
+
+<section id="solution">
+  <h2>Solution</h2>
+  <p>A three-layer LLM-Wiki, wrapped in a friendly five-verb CLI and an optional watcher:</p>
+  <ul>
+    <li><b>Layer 1 â€” <code>raw/</code> (immutable inputs).</b> Anything dropped is parsed with <b>Docling</b> (IBM, MIT â€” PDF/Office/image OCR + vision) with a <b>MarkItDown</b> fast-path for simple Office/HTML, then the original is preserved untouched in <code>raw/</code>, keyed by content hash (dedup).</li>
+    <li><b>Layer 2 â€” <code>wiki/</code> (LLM-compiled pages).</b> Claude compiles each source into interlinked Markdown: <code>sources/</code>, <code>entities/</code>, <code>concepts/</code>, <code>sessions/</code>. It reuses existing pages (dedup), adds <code>[[wikilinks]]</code>, and records contradictions. The wikilink network is the knowledge graph.</li>
+    <li><b>Layer 3 â€” schema + navigation.</b> A <code>schema.md</code> (page-type contract), an append-only <code>index.md</code> catalogue, and a ~500-word <code>hot.md</code> recent-context cache â€” plus a <code>.index/</code> SQLite sidecar (<code>sqlite-vec</code> cosine + FTS5 BM25) for 3-tier hybrid retrieval.</li>
+  </ul>
+  <p>Everything is local and Obsidian-compatible. The LLM does the bookkeeping (linking, summarising, dedup, conflict resolution); the human does curation and judgement. With no API key, ingest still parses + files sources and the index still serves BM25 â€” the wiki-compile step degrades gracefully to a stub page rather than failing.</p>
+  <figure>
+    <img src="mythic-proportion/solution.png" alt="a clean three-layer stacked architecture diagram, bottom layer raw immutable documents, middle layer a dense web of linked markdown wiki pages in blue green and purple nodes, top layer labelled schema index hot-cache and a sqlite hybrid-search chip, a drop-folder arrow feeding the bottom and a query arrow reading from the top, warm confident palette">
+    <div class="fig-pending"><b>Image pending</b><span class="hint">solution.png â€” see prompt sheet</span></div>
+    <figcaption>Target: Karpathy's 3-layer LLM-Wiki â€” immutable raw sources, an LLM-compiled wikilink graph, and a schema/index/cache navigation layer with a SQLite hybrid-search sidecar.</figcaption>
+  </figure>
+</section>
+
+<section id="files">
+  <h2>Relevant files</h2>
+  <h3>Existing (harness, read-only context â€” not modified)</h3>
+  <ul>
+    <li><code>AGENTS.md</code> / <code>CONSTITUTION.md</code> â€” the harness contract; the app is a self-contained subproject that honours N8 (no MCP; the app may call the Claude API itself, but the <em>harness's</em> operation never depends on it).</li>
+    <li><code>.claude/skills/lib/plan-images.ps1</code> â€” used to extract/apply this plan's figure images (manual, local, N8-safe).</li>
+    <li><code>.fable/</code>, <code>memory/</code>, <code>specs/</code> â€” example first-class ingest sources (the app is harness-aware: it can ingest the harness's own artifacts).</li>
+  </ul>
+  <h3>New (the mythic-proportion app)</h3>
+  <ul>
+    <li><code>mythic-proportion/pyproject.toml</code> â€” package + deps (docling, markitdown, anthropic, sqlite-vec, watchdog, typer/click, pydantic).</li>
+    <li><code>mythic-proportion/src/mythic_proportion/config.py</code> â€” Pydantic settings (vault path, model, embeddings backend, egress toggle).</li>
+    <li><code>mythic-proportion/src/mythic_proportion/vault/</code> â€” vault layout, <code>init</code>, page models, wikilink parse/write, advisory locking.</li>
+    <li><code>mythic-proportion/src/mythic_proportion/ingest/</code> â€” Docling + MarkItDown adapters, type router, dedup, dropâ†’raw mover.</li>
+    <li><code>mythic-proportion/src/mythic_proportion/compile/</code> â€” Claude compile step (prompt, page synthesis, dedup/conflict, index/hot maintenance).</li>
+    <li><code>mythic-proportion/src/mythic_proportion/index/</code> â€” SQLite schema, FTS5 + sqlite-vec, embeddings, hybrid retrieval.</li>
+    <li><code>mythic-proportion/src/mythic_proportion/watch/</code> â€” watchdog watcher wrapping the triggered core (debounce + lock).</li>
+    <li><code>mythic-proportion/src/mythic_proportion/cli/</code> â€” <code>mythic init/ingest/query/lint/watch</code>.</li>
+    <li><code>mythic-proportion/tests/</code> â€” pytest suite (fixtures, fakes for Docling/Claude, golden vault).</li>
+    <li><code>mythic-proportion/docs/</code> â€” README, architecture, usage, Obsidian setup.</li>
+    <li><code>mythic-proportion/specs/mythic-proportion.html</code> â€” <b>this plan</b> (lives inside the project folder per the request that everything sit under <code>mythic-proportion/</code>).</li>
+  </ul>
+</section>
+
+<section id="phases">
+  <h2>Implementation phases</h2>
+  <p class="legend">Built exclusively with FABLE-HARNESS primitives â€” the typed <span class="tag">engineer</span> producer agent writes code, verified by <span class="tag">verifier</span>; no Hydra, no pair-programmer, no Fable-5 in the build (Fable-5 authored <em>this plan only</em>, per N2).</p>
+
+  <!-- ===== Phase 1 ===== -->
+  <div class="phase">
+    <h3>Phase 1 â€” Project scaffold &amp; vault skeleton <code class="status" data-st="x">[x]</code></h3>
+    <p>Stand up an installable Python package, the config model, the vault layout, and the CLI skeleton so every later phase has a home. <code>mythic init</code> creates an Obsidian-compatible vault (<code>drop/ raw/ wiki/{sources,entities,concepts,sessions}/ .index/ .vault-meta/</code>) plus <code>schema.md</code>, <code>index.md</code>, <code>hot.md</code>, and a minimal <code>.obsidian/</code>.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>pyproject.toml</code> (PEP 621, src-layout, console-script <code>mythic</code>), pinned deps + extras (<code>[ingest]</code>, <code>[embeddings]</code>, <code>[watch]</code>) so the base install is light.</li>
+      <li><code class="status">[]</code> <code>config.py</code> â€” Pydantic settings from env/<code>.mythic.toml</code>: vault path, Claude model (<code>claude-sonnet-5</code> default), embeddings backend, <code>allow_egress</code> flag.</li>
+      <li><code class="status">[]</code> <code>vault/layout.py</code> + <code>vault/init.py</code> â€” create/validate the vault tree; write <code>schema.md</code> (page-type contract), empty <code>index.md</code>/<code>hot.md</code>, Obsidian config.</li>
+      <li><code class="status">[]</code> <code>cli/</code> â€” Typer app exposing <code>init/ingest/query/lint/watch</code> as stubs that dispatch into modules.</li>
+      <li><code class="status">[]</code> <code>README.md</code> quickstart + <code>.gitignore</code> (vault data, <code>.index/</code>, secrets).</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>pip install -e ".[dev]"</code> succeeds; <code>mythic --help</code> lists all five commands.</li>
+      <li><code class="status">[]</code> <code>mythic init ./tmpvault</code> produces the full tree; re-running is idempotent (no clobber).</li>
+      <li><code class="status">[]</code> <code>pytest tests/test_vault_init.py</code> asserts the tree, schema.md sections, and Obsidian compatibility.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes rather than looping forever.</p>
+    <figure>
+      <img src="mythic-proportion/phase1.png" alt="a clean file-tree diagram of the vault folder showing drop raw wiki sources entities concepts sessions index and vault-meta with schema index and hot markdown files highlighted, plus a terminal chip showing mythic init">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase1.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 1 output: the installable package and the initialised Obsidian-compatible vault skeleton.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 2 ===== -->
+  <div class="phase">
+    <h3>Phase 2 â€” Ingestion core (parse Â· dedup Â· preserve) <code class="status" data-st="x">[x]</code></h3>
+    <p>Turn anything in <code>drop/</code> into a normalized, parsed, deduped <code>IngestedSource</code> and preserve the immutable original in <code>raw/</code>. This is the always-on, no-API-required foundation.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>ingest/router.py</code> â€” classify by extension/MIME into <em>document</em> (PDF/DOCX/PPTX/XLSX/HTML/MD/TXT), <em>image</em> (PNG/JPG/WEBP/TIFF), <em>artifact</em> (code/JSON/YAML/logs).</li>
+      <li><code class="status">[]</code> <code>ingest/docling_adapter.py</code> â€” Docling â†’ unified Markdown + structure (tables, OCR, image captions); lazy import so base install stays light.</li>
+      <li><code class="status">[]</code> <code>ingest/markitdown_adapter.py</code> â€” fast deterministic path for simple Office/HTML/CSV (no ML).</li>
+      <li><code class="status">[]</code> <code>ingest/dedup.py</code> â€” SHA-256 content hash; skip/relink already-ingested sources; record provenance.</li>
+      <li><code class="status">[]</code> <code>ingest/pipeline.py</code> â€” orchestrate: read drop â†’ parse â†’ hash â†’ write parsed Markdown to a staging area â†’ move original to <code>raw/&lt;hash&gt;.&lt;ext&gt;</code> â†’ emit <code>IngestedSource</code>.</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Unit tests with a fake Docling backend cover each router branch (doc/image/artifact) and a corrupt-file path.</li>
+      <li><code class="status">[]</code> Dedup test: dropping the same file twice yields one <code>raw/</code> entry and a logged skip.</li>
+      <li><code class="status">[]</code> Integration: a fixture PDF + PNG + JSON in <code>drop/</code> all land in <code>raw/</code> with parsed Markdown; <code>drop/</code> is emptied.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes.</p>
+    <figure>
+      <img src="mythic-proportion/phase2.png" alt="a horizontal pipeline diagram, a mixed stack of files entering a router that forks into docling and markitdown parsers, then a dedup hash gate, then splitting into an immutable raw archive box and a parsed-markdown staging box">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase2.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 2 output: the parse â†’ dedup â†’ preserve ingestion pipeline, runnable with zero API access.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 3 ===== -->
+  <div class="phase">
+    <h3>Phase 3 â€” LLM compile: wiki pages &amp; the wikilink graph <code class="status" data-st="x">[x]</code></h3>
+    <p>The heart of the LLM-Wiki pattern. Given a parsed source plus the current <code>index.md</code>/<code>schema.md</code>, Claude compiles 8â€“15 interlinked Markdown pages, reusing existing pages, weaving <code>[[wikilinks]]</code>, and recording contradictions â€” then updates <code>index.md</code> and refreshes <code>hot.md</code>.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>compile/prompt.py</code> â€” schema-grounded system prompt: page-type rules, wikilink conventions, dedup-against-index instruction, conflict-record format. (Sonnet-tier prompting: separate "extract everything" from "filter/rank" per model-routing quirks.)</li>
+      <li><code class="status">[]</code> <code>compile/client.py</code> â€” Anthropic Messages API wrapper: retries, token budgeting, structured tool-output for the page set; <code>allow_egress</code>-gated.</li>
+      <li><code class="status">[]</code> <code>compile/writer.py</code> â€” write pages with frontmatter (type, source hash, created/updated, tags) + advisory per-file lock (60s stale reap); never overwrite a human-edited page without a merge note.</li>
+      <li><code class="status">[]</code> <code>compile/graph.py</code> â€” resolve/normalize wikilinks, create stub pages for dangling links, update backlinks in <code>index.md</code>.</li>
+      <li><code class="status">[]</code> <code>compile/degrade.py</code> â€” no-API fallback: emit a single well-formed source-summary stub page so ingest never hard-fails.</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Golden test with a <b>fake Claude client</b> returning a canned page set â†’ asserts files written, wikilinks resolved, index/hot updated.</li>
+      <li><code class="status">[]</code> Dedup/conflict test: re-compiling an overlapping source links to the existing entity page and appends a contradiction note rather than duplicating.</li>
+      <li><code class="status">[]</code> Degradation test: with egress disabled, ingest still produces a valid stub page and exits 0.</li>
+      <li><code class="status">[]</code> Lint (from Phase 5) reports zero broken links on the golden vault.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes.</p>
+    <figure>
+      <img src="mythic-proportion/phase3.png" alt="a parsed source document on the left feeding into a claude compile engine in the centre, emitting on the right a cluster of linked note cards colour-coded source-green entity-purple concept-blue with wikilink threads between them and a small contradiction flag on one link">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase3.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 3 output: Claude compiles a source into a colour-coded, cross-linked page cluster â€” the compounding graph.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 4 ===== -->
+  <div class="phase">
+    <h3>Phase 4 â€” Hybrid index (sqlite-vec + FTS5) <code class="status" data-st="x">[x]</code></h3>
+    <p>A zero-server SQLite sidecar under <code>.index/</code> giving fast retrieval: FTS5 for BM25 sparse search (always available, no API) and <code>sqlite-vec</code> for cosine vector search, with a local embeddings backend. Incremental â€” only changed pages re-index.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>index/schema.sql</code> â€” <code>pages</code>, FTS5 virtual table, <code>vec_pages</code> (sqlite-vec), <code>meta</code> (content hashes for incremental sync).</li>
+      <li><code class="status">[]</code> <code>index/embeddings.py</code> â€” pluggable backend: local (fastembed/sentence-transformers) default, optional Claude/remote; L2-normalized vectors.</li>
+      <li><code class="status">[]</code> <code>index/store.py</code> â€” upsert/delete by page hash; <code>reindex</code> walks <code>wiki/</code> and syncs only diffs.</li>
+      <li><code class="status">[]</code> <code>index/retrieve.py</code> â€” 3-tier hybrid: BM25 candidates â†’ vector cosine rerank â†’ optional cross-page expansion via wikilinks; graceful BM25-only when embeddings absent.</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>sqlite-vec</code> loads on the target platform; a smoke test inserts + queries vectors.</li>
+      <li><code class="status">[]</code> Incremental test: editing one page re-indexes exactly one row (hash-diff), not the whole vault.</li>
+      <li><code class="status">[]</code> Retrieval test: a known query returns the expected top page under both hybrid and BM25-only modes.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes.</p>
+    <figure>
+      <img src="mythic-proportion/phase4.png" alt="a sqlite database cylinder split into two labelled lanes FTS5-BM25 and sqlite-vec-cosine, a query arrow entering and fanning across both lanes then merging into a ranked result list, with a small delta icon showing only-changed-pages incremental sync">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase4.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 4 output: the incremental SQLite hybrid-search sidecar â€” BM25 + vector cosine, zero server.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 5 ===== -->
+  <div class="phase">
+    <h3>Phase 5 â€” Query &amp; lint <code class="status" data-st="x">[x]</code></h3>
+    <p>The two operator-facing read paths. <code>query</code> answers a question by walking hot-cache â†’ index â†’ specific pages and asking Claude to synthesize a cited answer. <code>lint</code> is the health check: orphans, broken wikilinks, stale index rows, and coverage gaps.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>cli</code> <code>query</code> â€” retrieve (Phase 4) â†’ assemble context (hot.md + top pages) â†’ Claude answer with <code>[[page]]</code> citations; <code>--no-llm</code> prints ranked pages only (works offline).</li>
+      <li><code class="status">[]</code> <code>vault/lint.py</code> â€” detect orphan pages (no in/out links), broken/dangling wikilinks, index staleness, and thin/empty pages; emit a structured report + exit code.</li>
+      <li><code class="status">[]</code> <code>--fix</code> for lint â€” auto-create dangling stubs, prune dead index rows, refresh <code>hot.md</code>.</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Query test (fake Claude): correct pages retrieved and cited for a known question; <code>--no-llm</code> path returns ranked pages offline.</li>
+      <li><code class="status">[]</code> Lint test: a vault seeded with one orphan + one broken link is detected; <code>--fix</code> resolves both and re-lint is clean.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes.</p>
+    <figure>
+      <img src="mythic-proportion/phase5.png" alt="split panel, left side a query flowing through hot-cache then index then pages then a claude answer bubble with citation chips, right side a lint health dashboard listing orphans broken-links and stale-index counts with green checkmarks after fix">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase5.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 5 output: cited question-answering and a self-healing vault health check.</figcaption>
+    </figure>
+  </div>
+
+  <!-- ===== Phase 6 ===== -->
+  <div class="phase">
+    <h3>Phase 6 â€” Optional watcher, Obsidian polish, docs &amp; suite <code class="status" data-st="x">[x]</code></h3>
+    <p>Wrap the triggered ingest core in an optional real-time watcher, finish Obsidian compatibility, and complete tests + docs. The watcher is a thin layer over the same core (your "both" choice) â€” no separate code path to drift.</p>
+    <h4>Tasks</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> <code>watch/watcher.py</code> â€” watchdog observer on <code>drop/</code>, debounce (settle window), advisory-lock reuse, calls the exact Phase-2/3 pipeline; <code>mythic watch</code> foreground command with clean shutdown.</li>
+      <li><code class="status">[]</code> Obsidian: graph-view colour groups by page type, <code>_templates/</code> frontmatter, sensible <code>.obsidian/app.json</code>; verify the vault opens cleanly.</li>
+      <li><code class="status">[]</code> Harness-aware ingest recipe: doc + <code>make ingest-harness</code> to pull <code>specs/</code>, <code>memory/</code>, recent <code>.fable/</code> artifacts into the vault.</li>
+      <li><code class="status">[]</code> Docs: <code>docs/architecture.md</code>, <code>docs/usage.md</code>, <code>docs/obsidian.md</code>; top-level README with the 60-second quickstart.</li>
+      <li><code class="status">[]</code> CI-style <code>make check</code>: ruff + mypy + pytest with coverage on the pipeline.</li>
+    </ul>
+    <h4>Testing strategy â€” loop until every check passes before advancing</h4>
+    <ul class="checklist">
+      <li><code class="status">[]</code> Watcher test: dropping a file while <code>watch</code> runs triggers exactly one ingest (debounced, no double-fire).</li>
+      <li><code class="status">[]</code> End-to-end: <code>init â†’ (drop 3 mixed files) â†’ ingest â†’ query â†’ lint</code> on a fresh vault, all green.</li>
+      <li><code class="status">[]</code> Obsidian smoke: vault opens; graph view renders type-coloured nodes; no config errors.</li>
+    </ul>
+    <p class="legend">If a check cannot be made to pass after reasonable effort, mark the phase <code class="status" data-st="f">[f]</code> and record why in Notes.</p>
+    <figure>
+      <img src="mythic-proportion/phase6.png" alt="an eye-shaped watchdog icon hovering over the drop folder with a real-time pulse line, next to an obsidian graph-view screenshot-style constellation of coloured nodes, conveying always-on optional watching plus native obsidian compatibility">
+      <div class="fig-pending"><b>Image pending</b><span class="hint">phase6.png â€” see prompt sheet</span></div>
+      <figcaption>Phase 6 output: the optional real-time watcher, Obsidian-native polish, docs, and a green end-to-end suite.</figcaption>
+    </figure>
+  </div>
+
+</section>
+
+<section id="validation">
+  <h2>Global validation commands â€” final gate (run after all phases show [x])</h2>
+  <ul class="checklist">
+    <li><code class="status" data-st="x">[x]</code> <code>cd mythic-proportion &amp;&amp; ruff check . &amp;&amp; mypy src</code> â€” lint + type-check clean (ruff: all passed; mypy: 34 files, no issues).</li>
+    <li><code class="status" data-st="x">[x]</code> <code>pytest -q --cov=mythic_proportion</code> â€” full suite green (102 passed; ~88% coverage).</li>
+    <li><code class="status" data-st="x">[x]</code> Cold-start E2E on a scratch vault: <code>mythic init â†’ drop 3 mixed sources â†’ mythic ingest â†’ mythic query "â€¦" â†’ mythic lint</code> all succeed.</li>
+    <li><code class="status" data-st="x">[x]</code> No-API degradation pass: E2E ran with no API key and no heavy deps â€” ingest+index+BM25 query all succeed via stub pages.</li>
+    <li><code class="status" data-st="x">[x]</code> Independent <span class="tag">verifier</span> agent re-derived every claim from disk (not self-report) â€” verdict: <b>pass</b>.</li>
+  </ul>
+  <p class="legend">Same loop discipline as per-phase checks: nothing is done until every command here passes.</p>
+</section>
+
+<section id="questionables">
+  <h2>Questionables</h2>
+  <ul>
+    <li><b>Assumption:</b> Docling installs cleanly on this Windows 11 host (it pulls heavier ML deps) â€” <b>Why it matters:</b> if not, the base ingest path leans on MarkItDown + a lighter PDF lib and Docling becomes an opt-in extra. â€” <b>Resolved:</b> <code class="status">[]</code> open</li>
+    <li><b>Assumption:</b> A prebuilt <code>sqlite-vec</code> wheel loads against the bundled Python SQLite on Windows â€” <b>Why it matters:</b> if the extension won't load, the index degrades to FTS5-only (still functional) or falls back to a pure-Python cosine over stored vectors. â€” <b>Resolved:</b> <code class="status">[]</code> open</li>
+    <li><b>Assumption:</b> Default embeddings backend is local (fastembed) rather than an API â€” <b>Why it matters:</b> keeps the "works offline" promise and avoids per-ingest token cost; a remote backend stays available as an opt-in. â€” <b>Resolved:</b> <code class="status">[]</code> open</li>
+    <li><b>Assumption:</b> An <code>ANTHROPIC_API_KEY</code> is available in the environment for the compile/query steps â€” <b>Why it matters:</b> without it the app still runs (degraded stubs + BM25) but the flagship "LLM-compiled graph" needs it; the plan must never hard-require it. â€” <b>Resolved:</b> <code class="status">[]</code> open â€” confirm your key/model preference before Phase 3.</li>
+    <li><b>Assumption:</b> The plan HTML living at <code>mythic-proportion/specs/</code> (inside the project) rather than the harness-root <code>specs/</code> is correct, given "everything under mythic-proportion/". â€” <b>Resolved:</b> <code class="status" data-st="x">[x]</code> confirmed (per the request).</li>
+  </ul>
+</section>
+
+<section id="notes">
+  <h2>Notes</h2>
+  <p><b>Why LLM-Wiki over classic GraphRAG/LightRAG.</b> GraphRAG builds community summaries at high token cost (~610k tokens where LightRAG uses &lt;100); LightRAG is a leaner entity/relation index. But both are <em>retrieval indices</em>. Karpathy's LLM-Wiki instead produces <em>durable human-readable pages</em> that compound â€” the graph is the wikilinks, not a proprietary index â€” which is exactly the "own your knowledge, simple yet robust" brief. We still borrow LightRAG's spirit (entity/relation pages) and layer a hybrid index for speed.</p>
+  <p><b>Why files-first + SQLite, not a graph DB.</b> KÃ¹zu â€” the leading embedded graph DB â€” was archived after Apple's Oct-2025 acquisition; betting the store on it is a dead-end. Markdown+wikilinks is future-proof, diff-able, Obsidian-native, and user-owned; SQLite (+ actively-maintained <code>sqlite-vec</code> + built-in FTS5) covers fast hybrid retrieval without a server. This is the durability-over-cleverness call.</p>
+  <p><b>Build governance.</b> Implementation uses only FABLE-HARNESS primitives â€” the typed <code>engineer</code> agent writes code against this plan (which serves as the spec), <code>verifier</code> independently confirms each phase from disk, Reflexion Ã—1 then escalate on failures (N3), typed producers only (N7). No Hydra, no pair-programmer, no other installed squad. Fable-5 authored <em>this plan only</em> (N2) and is not used in the build.</p>
+  <p><b>Graceful degradation is a first-class requirement, not a nicety.</b> Every LLM/embedding/parse dependency has a documented fallback so the app is useful with just Python + files (parse + file + BM25), better with local embeddings (hybrid search), and best with an API key (compiled graph + synthesized answers).</p>
+  <figure>
+    <img src="mythic-proportion/notes.png" alt="a capability-vs-dependencies matrix, three columns python-only then plus-local-embeddings then plus-claude-api, rows for ingest search compile query showing progressively more features lighting up, illustrating graceful degradation tiers">
+    <div class="fig-pending"><b>Image pending</b><span class="hint">notes.png â€” see prompt sheet</span></div>
+    <figcaption>Graceful-degradation tiers: what works with just Python, with local embeddings, and with a Claude API key.</figcaption>
+  </figure>
+</section>
+
+<section id="amendments">
+  <h2>Amendments</h2>
+  <details class="amend" open>
+    <summary>2 amendments</summary>
+    <p>Append-only post-execution change history (newest at the bottom). Never rewrite history â€” only add.</p>
+    <h4>2026-07-11 - Full implementation completed &amp; independently verified</h4>
+    <p>All 6 phases built with FABLE-HARNESS <code>engineer</code> agents only (no Hydra, no pair-programmer; Fable-5 authored this plan only, per N2). Final state: <b>102 tests pass</b>, <code>ruff</code> + <code>mypy</code> clean (34 source files), cold-start end-to-end verified on a fresh vault, and an independent <code>verifier</code> agent re-derived every claim from disk (verdict: <b>pass</b>).</p>
+    <p><b>Two defects were found during the global-validation gate and fixed (this is why the gate exists):</b></p>
+    <ul>
+      <li><b>Zero-dep plain-text ingest regression.</b> A dropped <code>.md</code>/<code>.txt</code> hard-failed with an <code>IngestDependencyError</code> because the document parser unconditionally required Docling. Fixed with a text-fast-path (<code>read_text_document</code>) so plain-text documents ingest with zero optional deps, honouring the first-class "works with just Python + files" requirement. Binary formats (PDF/DOCX/images) still legitimately require the <code>[ingest]</code> extra.</li>
+      <li><b>Empty page titles in CLI output.</b> Query/lint rendered titles as <code>[]</code>. Root cause (sharper than first hypothesised): Rich markup was swallowing <code>[[lowercase-title]]</code> as an unclosed style tag. Fixed by escaping/disabling markup on dynamic output and adding a <code>derive_title</code> fallback chain (frontmatter title -&gt; first H1 -&gt; humanised filename).</li>
+    </ul>
+    <p><b>Preserved invariants across both fixes (N9):</b> <code>classify()</code> return values unchanged; <code>default_parser_registry()</code> public shape unchanged; the five-verb CLI surface (<code>init/ingest/query/lint/watch</code>) and page-frontmatter contract unchanged. <b>Changed behaviours:</b> plain-text document dispatch now uses a zero-dep reader; CLI dynamic output is markup-safe. Images pipeline unchanged: 10 figure slots remain "image pending" (prompt sheet at <code>specs/mythic-proportion.image-prompts.md</code>) â€” no images were claimed as rendered.</p>
+    <h4>2026-07-11 - Phase 7 web UI added; LLM path rerouted to AuthHub; no-LLM graceful degradation removed</h4>
+    <p>Two further changes landed after the initial verified build, both implemented by FABLE-HARNESS <code>engineer</code> agents against this plan, 138 pytest passing:</p>
+    <ul>
+      <li><b>Phase 7 â€” local web UI (new sixth verb, <code>mythic serve</code>).</b> A FastAPI + vanilla-JS SPA (<code>src/mythic_proportion/web/</code>, optional <code>[web]</code> extra) at <code>http://127.0.0.1:8765/</code> by default, across six tabs (Wiki / Search / Ask / Graph / Ingest / Lint), backed by the exact same building blocks (<code>ingest_drop</code>, <code>compile_source</code>, <code>hybrid_search</code>, <code>answer_query</code>, <code>lint_vault</code>/<code>lint_fix</code>) the CLI already uses, so the web UI can never drift from CLI behaviour.</li>
+      <li><b>LLM path rerouted to AuthHub.</b> The default LLM provider is now AuthHub, an OpenAI-compatible multi-provider gateway (<code>src/mythic_proportion/llm/authhub.py</code>), authenticated via <code>AUTHHUB_API_KEY</code> and routed to a DeepSeek model (<code>MYTHIC_LLM_MODEL=deepseek-chat</code> by default) through <code>POST {base_url}/api/v1/ai/chat/completions</code>, with structured output obtained via prompted strict-JSON (that endpoint has no <code>tools</code>/<code>response_format</code>). Anthropic/Claude remains a selectable alternate provider via <code>MYTHIC_LLM_PROVIDER=anthropic</code> + <code>ANTHROPIC_API_KEY</code>.</li>
+      <li><b>No-LLM graceful degradation removed (deliberate reversal).</b> <code>compile</code> and <code>query</code>'s answer synthesis now REQUIRE a working, configured LLM provider; the earlier stub-page compile fallback and <code>--no-llm</code> ranked-pages-digest fallback are gone, replaced by actionable <code>CompileError</code>/<code>AnswerError</code> exceptions naming exactly what's missing. Rationale: silent degradation looked like success and could hide a missing/rotated credential indefinitely, and a stub page or ranked-pages list isn't a degraded version of an LLM-Wiki's core value proposition â€” it's a different, much weaker product. BM25/hybrid retrieval and the dangling-wikilink graph stubs in <code>lint</code> were never part of this and remain LLM-independent.</li>
+    </ul>
+    <p><b>Preserved invariants (N9):</b> the original five verbs (<code>init/ingest/query/lint/watch</code>) and their flags are unchanged in shape (only <code>query --no-llm</code>'s behaviour changed, from degrading to erroring, as documented); Layer 1 (parse+file+dedup) and BM25 search remain LLM-independent; page-frontmatter contract, <code>schema.md</code>/<code>index.md</code>/<code>hot.md</code> conventions, and the wikilink-network-is-the-graph design are unchanged; <code>fastapi</code>/<code>uvicorn</code>/<code>httpx</code> are all lazy-imported so the rest of the package stays importable without the new optional extras. <b>Changed behaviours:</b> a sixth verb (<code>serve</code>) was added; the default LLM provider and its HTTP contract changed from direct Anthropic to AuthHub-fronted DeepSeek; <code>compile</code>/<code>query</code> now hard-require a working LLM instead of degrading.</p>
+  </details>
+</section>
+
+</div>
+</body>
+</html>
+

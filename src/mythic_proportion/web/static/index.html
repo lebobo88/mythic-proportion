@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mythic Proportion</title>
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+<div id="app">
+  <header class="app-header">
+    <h1>Mythic Proportion</h1>
+    <nav class="tabs" id="tabs">
+      <button data-view="wiki" class="active">Wiki</button>
+      <button data-view="search">Search</button>
+      <button data-view="ask">Ask</button>
+      <button data-view="graph">Graph</button>
+      <button data-view="ingest">Ingest</button>
+      <button data-view="lint">Lint</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+    <button id="theme-toggle" title="Toggle light/dark theme">&#9789;</button>
+  </header>
+
+  <main class="layout">
+
+    <section id="view-wiki" class="view active">
+      <aside class="sidebar">
+        <div class="sidebar-filter">
+          <input id="page-filter" type="search" placeholder="Filter pages..." />
+        </div>
+        <div id="wiki-status-hint" class="status-hint hidden"></div>
+        <div class="page-list" id="page-list"></div>
+      </aside>
+      <div class="reading-pane" id="reading-pane">
+        <div class="empty-state">Select a page from the sidebar, or use Search / Ask.</div>
+      </div>
+    </section>
+
+    <section id="view-search" class="view">
+      <div class="search-bar">
+        <input id="search-input" type="search" placeholder="Search the vault..." autocomplete="off" />
+      </div>
+      <div id="search-results"></div>
+    </section>
+
+    <section id="view-ask" class="view">
+      <div class="ask-bar">
+        <input id="ask-input" type="text" placeholder="Ask a question..." />
+        <button class="primary" id="ask-submit">Ask</button>
+      </div>
+      <label class="ask-options">
+        <input type="checkbox" id="ask-use-llm" checked /> Use LLM synthesis (requires a configured LLM provider)
+      </label>
+      <div class="ask-model-hint" id="ask-model-hint">Model: &hellip;</div>
+      <div id="ask-answer"></div>
+    </section>
+
+    <section id="view-graph" class="view">
+      <canvas id="graph-canvas"></canvas>
+      <div id="graph-status-hint" class="status-hint hidden"></div>
+      <div class="graph-legend">
+        <div><span class="type-dot source"></span> source</div>
+        <div><span class="type-dot entity"></span> entity</div>
+        <div><span class="type-dot concept"></span> concept</div>
+        <div><span class="type-dot session"></span> session</div>
+      </div>
+      <div class="graph-hint">Drag nodes to rearrange &middot; click a node to open its page</div>
+    </section>
+
+    <section id="view-ingest" class="view">
+      <h2 style="margin:0">Drop zone</h2>
+      <p style="color:var(--text-muted); max-width:640px">
+        Drag files here (or click to choose), then they'll be moved into
+        <code>drop/</code> and ingested immediately. You can also just place
+        files in <code>drop/</code> yourself and click "Ingest drop/" below.
+      </p>
+      <div class="drop-zone" id="drop-zone">
+        <strong>Drop files here</strong> or click to choose
+        <input id="file-input" type="file" multiple class="hidden" />
+      </div>
+      <div>
+        <button class="secondary" id="ingest-only-btn">Ingest drop/ (no upload)</button>
+      </div>
+      <div id="ingest-result"></div>
+    </section>
+
+    <section id="view-lint" class="view">
+      <div>
+        <button class="primary" id="lint-fix-btn">Fix issues</button>
+        <button class="secondary" id="lint-refresh-btn">Refresh</button>
+      </div>
+      <div id="lint-report"></div>
+    </section>
+
+    <section id="view-settings" class="view">
+      <h2 style="margin:0">LLM settings</h2>
+      <p style="color:var(--text-muted); max-width:640px">
+        Choose the provider and model used for compile/query synthesis. The
+        API key itself is never set here -- it stays configured via the
+        <code>AUTHHUB_API_KEY</code>/<code>ANTHROPIC_API_KEY</code>
+        environment variable on the server.
+      </p>
+      <form id="settings-form" class="settings-form">
+        <label class="settings-field">
+          <span>Provider</span>
+          <select id="settings-provider">
+            <option value="authhub">authhub</option>
+            <option value="anthropic">anthropic</option>
+          </select>
+        </label>
+        <label class="settings-field">
+          <span>Model</span>
+          <select id="settings-model-select" class="hidden"></select>
+          <input id="settings-model-input" type="text" placeholder="model slug" class="hidden" />
+        </label>
+        <div id="settings-models-hint" class="settings-hint"></div>
+        <div id="settings-key-hint" class="settings-hint"></div>
+        <button class="primary" type="submit">Save</button>
+      </form>
+      <div id="settings-status"></div>
+    </section>
+
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
