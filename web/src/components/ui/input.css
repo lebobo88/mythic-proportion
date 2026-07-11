@@ -1,0 +1,26 @@
+.mp-input {
+  display: block;
+  width: 100%;
+  background-color: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--input-radius);
+  padding: var(--input-padding-y) var(--input-padding-x);
+  font-size: var(--font-size-sm);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.mp-input::placeholder {
+  color: var(--input-placeholder);
+}
+
+.mp-input:focus-visible {
+  border-color: var(--input-border-focus);
+  outline: 2px solid var(--input-border-focus);
+  outline-offset: 1px;
+}
+
+.mp-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -1,0 +1,16 @@
+.mp-command-palette-content {
+  padding: 0;
+  top: 16vh;
+}
+
+.mp-command-palette-content .mp-dialog-title,
+.mp-command-palette-content .mp-dialog-description {
+  /* Visually hidden but present for screen readers — cmdk's own input is
+     the visible affordance; Radix still requires an accessible title. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  margin: -1px;
+}

@@ -1,0 +1,58 @@
+/*
+ * `--graph-*` token family — the single palette shared by the 2D chrome and
+ * the future 3D R3F scene (Phase 5). Read at runtime via
+ * `src/lib/graph-colors.ts` (`getComputedStyle(...).getPropertyValue`) into
+ * `THREE.Color`, re-read on every `data-theme` change, so the 3D scene can
+ * never drift from the 2D palette. Node type names match the legacy app's
+ * legend (source / entity / concept / session) — see
+ * specs/ROADMAP-BRIEF.md §1 "Current graph".
+ */
+
+:root,
+[data-theme="dark"] {
+  --graph-bg: var(--neutral-0);
+
+  --graph-node-source: oklch(0.75 0.14 230);
+  --graph-node-entity: oklch(0.75 0.16 20);
+  --graph-node-concept: oklch(0.75 0.15 150);
+  --graph-node-session: oklch(0.75 0.13 300);
+
+  --graph-edge: oklch(0.4 0.02 260 / 0.55);
+  --graph-edge-active: var(--color-accent);
+
+  --graph-community-1: var(--ramp-community-1);
+  --graph-community-2: var(--ramp-community-2);
+  --graph-community-3: var(--ramp-community-3);
+  --graph-community-4: var(--ramp-community-4);
+  --graph-community-5: var(--ramp-community-5);
+  --graph-community-6: var(--ramp-community-6);
+  --graph-community-7: var(--ramp-community-7);
+  --graph-community-8: var(--ramp-community-8);
+
+  --graph-hull-fill: oklch(0.5 0.05 260 / 0.08);
+  --graph-glow: oklch(0.85 0.12 250 / 0.65);
+}
+
+[data-theme="light"] {
+  --graph-bg: var(--neutral-800);
+
+  --graph-node-source: oklch(0.55 0.14 230);
+  --graph-node-entity: oklch(0.55 0.18 20);
+  --graph-node-concept: oklch(0.55 0.16 150);
+  --graph-node-session: oklch(0.55 0.15 300);
+
+  --graph-edge: oklch(0.65 0.02 260 / 0.55);
+  --graph-edge-active: var(--color-accent);
+
+  --graph-community-1: var(--ramp-community-1);
+  --graph-community-2: var(--ramp-community-2);
+  --graph-community-3: var(--ramp-community-3);
+  --graph-community-4: var(--ramp-community-4);
+  --graph-community-5: var(--ramp-community-5);
+  --graph-community-6: var(--ramp-community-6);
+  --graph-community-7: var(--ramp-community-7);
+  --graph-community-8: var(--ramp-community-8);
+
+  --graph-hull-fill: oklch(0.6 0.05 260 / 0.1);
+  --graph-glow: oklch(0.6 0.14 250 / 0.55);
+}

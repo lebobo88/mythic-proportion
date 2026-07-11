@@ -1,0 +1,86 @@
+/*
+ * Tier 1 — primitives.
+ *
+ * Raw OKLCH color ramps, spacing/type/radius/elevation scales, and the
+ * categorical community ramp. Primitives never encode *meaning* (no "bg",
+ * "text", "danger") — only raw values. Tier 2 (semantic.css) maps these to
+ * meaning, per theme. OKLCH is used throughout because its L channel is
+ * perceptually even, which keeps node/community colors equal-weight on a
+ * dark 3D scene (see specs/ROADMAP-BRIEF.md §6.6).
+ */
+
+:root {
+  /* Neutral ramp (hue held near-achromatic, slight cool tint at 260deg) */
+  --neutral-0: oklch(0.12 0.01 260);
+  --neutral-50: oklch(0.16 0.02 260);
+  --neutral-100: oklch(0.22 0.02 260);
+  --neutral-200: oklch(0.32 0.02 260);
+  --neutral-300: oklch(0.42 0.02 260);
+  --neutral-400: oklch(0.55 0.02 260);
+  --neutral-500: oklch(0.68 0.02 260);
+  --neutral-600: oklch(0.78 0.02 260);
+  --neutral-700: oklch(0.85 0.01 260);
+  --neutral-800: oklch(0.94 0.01 260);
+  --neutral-900: oklch(0.98 0.01 260);
+  --neutral-1000: oklch(0.20 0.02 260);
+
+  /* Accent ramp (blue-violet, hue 250) */
+  --accent-300: oklch(0.45 0.16 250);
+  --accent-500: oklch(0.60 0.18 250);
+  --accent-600: oklch(0.72 0.15 250);
+  --accent-700: oklch(0.82 0.10 250);
+
+  /* Feedback ramps */
+  --danger-400: oklch(0.55 0.20 25);
+  --danger-600: oklch(0.72 0.17 25);
+  --warning-400: oklch(0.60 0.16 80);
+  --warning-600: oklch(0.78 0.15 85);
+  --success-400: oklch(0.55 0.15 150);
+  --success-600: oklch(0.72 0.16 150);
+
+  /* Categorical community ramp — evenly spaced hues at matched L/C so no
+     single community reads as visually "louder" than another, in either
+     theme. Consumed by tokens/graph.css. */
+  --ramp-community-1: oklch(0.72 0.16 20);
+  --ramp-community-2: oklch(0.72 0.16 65);
+  --ramp-community-3: oklch(0.72 0.16 110);
+  --ramp-community-4: oklch(0.72 0.16 155);
+  --ramp-community-5: oklch(0.72 0.16 200);
+  --ramp-community-6: oklch(0.72 0.16 245);
+  --ramp-community-7: oklch(0.72 0.16 290);
+  --ramp-community-8: oklch(0.72 0.16 335);
+
+  /* Spacing scale — 4px base */
+  --space-0: 0px;
+  --space-1: 0.25rem; /* 4px */
+  --space-2: 0.5rem; /* 8px */
+  --space-3: 0.75rem; /* 12px */
+  --space-4: 1rem; /* 16px */
+  --space-5: 1.5rem; /* 24px */
+  --space-6: 2rem; /* 32px */
+  --space-7: 3rem; /* 48px */
+  --space-8: 4rem; /* 64px */
+
+  /* Type scale — modular, ratio ~1.25 */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.563rem;
+  --font-size-2xl: 1.953rem;
+  --font-size-3xl: 2.441rem;
+  --font-family-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-family-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Radii */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-full: 9999px;
+
+  /* Elevation primitives (alpha layered on near-black/near-white per theme
+     in semantic.css; these are the shadow *shapes*) */
+  --shadow-sm-shape: 0 1px 2px;
+  --shadow-md-shape: 0 4px 12px;
+  --shadow-lg-shape: 0 12px 32px;
+}

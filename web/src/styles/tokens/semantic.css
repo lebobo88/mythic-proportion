@@ -1,0 +1,68 @@
+/*
+ * Tier 2 — semantic tokens.
+ *
+ * Maps tier-1 primitives to *meaning* (surface, text, border, accent,
+ * feedback). Dark is the default (`:root`) per the locked "dark-first, ship
+ * both" decision; `[data-theme="light"]` on <html> overrides. Every pair
+ * below is contrast-audited in src/styles/__tests__/contrast.test.ts against
+ * WCAG 4.5:1 (body text) / 3:1 (large text + UI) in BOTH themes.
+ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: var(--neutral-50);
+  --color-bg-elevated: var(--neutral-100);
+  --color-bg-inset: var(--neutral-0);
+
+  --color-text-primary: var(--neutral-900);
+  --color-text-secondary: var(--neutral-600);
+  --color-text-disabled: var(--neutral-400);
+  --color-text-on-accent: var(--neutral-0);
+
+  --color-border: var(--neutral-200);
+  --color-border-strong: var(--neutral-300);
+
+  --color-accent: var(--accent-600);
+  --color-accent-strong: var(--accent-700);
+  --color-accent-muted: var(--accent-500);
+
+  --color-danger: var(--danger-600);
+  --color-warning: var(--warning-600);
+  --color-success: var(--success-600);
+
+  --shadow-color: 0deg 0% 0%;
+  --shadow-sm: var(--shadow-sm-shape) hsl(var(--shadow-color) / 0.4);
+  --shadow-md: var(--shadow-md-shape) hsl(var(--shadow-color) / 0.45);
+  --shadow-lg: var(--shadow-lg-shape) hsl(var(--shadow-color) / 0.5);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg: var(--neutral-900);
+  --color-bg-elevated: var(--neutral-800);
+  --color-bg-inset: var(--neutral-700);
+
+  --color-text-primary: var(--neutral-1000);
+  --color-text-secondary: var(--neutral-300);
+  --color-text-disabled: var(--neutral-500);
+  --color-text-on-accent: var(--neutral-900);
+
+  --color-border: var(--neutral-700);
+  --color-border-strong: var(--neutral-600);
+
+  --color-accent: var(--accent-300);
+  --color-accent-strong: var(--accent-500);
+  --color-accent-muted: var(--accent-500);
+
+  --color-danger: var(--danger-400);
+  --color-warning: var(--warning-400);
+  --color-success: var(--success-400);
+
+  --shadow-color: 220deg 20% 40%;
+  --shadow-sm: var(--shadow-sm-shape) hsl(var(--shadow-color) / 0.12);
+  --shadow-md: var(--shadow-md-shape) hsl(var(--shadow-color) / 0.16);
+  --shadow-lg: var(--shadow-lg-shape) hsl(var(--shadow-color) / 0.2);
+}

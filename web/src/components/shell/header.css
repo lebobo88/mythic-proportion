@@ -1,0 +1,26 @@
+.mp-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background-color: var(--shell-header-bg);
+  border-bottom: 1px solid var(--shell-header-border);
+}
+
+.mp-header-brand {
+  font-weight: 700;
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+}
+
+.mp-header-shortcut {
+  font-size: var(--font-size-xs);
+  color: var(--palette-item-fg-muted);
+  border: 1px solid var(--palette-border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+.mp-header-spacer {
+  flex: 1;
+}

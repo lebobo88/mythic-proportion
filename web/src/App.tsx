@@ -1,29 +1,73 @@
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { useEffect, useState } from "react";
+import { AppShell } from "./components/shell/AppShell";
+import { TooltipProvider } from "./components/ui";
+import { CommandPalette } from "./components/command-palette/CommandPalette";
+import { DesignPreview } from "./routes/DesignPreview";
+import { useTheme } from "./lib/useTheme";
+import { TABS, type TabName } from "./components/shell/TabNav";
 
-// Placeholder scaffold page — proves the Vite + React + TypeScript + React
-// Three Fiber toolchain builds and renders end to end. Real views (Wiki /
-// Search / Ask / Graph / Ingest / Lint / Settings) land in Phase 1+ on top
-// of the design-system tokens.
-function App() {
+// Minimal hash router: `#/design` shows the living design-system preview
+// (Phase 1 deliverable); everything else shows the app shell. Real per-tab
+// views (Wiki/Search/Ask/Graph/Ingest/Lint/Settings) land in Phase 2 on top
+// of this shell + the design system built here.
+function useHashRoute(): string {
+  const [hash, setHash] = useState(() => window.location.hash);
+  useEffect(() => {
+    function onHashChange() {
+      setHash(window.location.hash);
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return hash;
+}
+
+function TabPlaceholder({ tab }: { tab: TabName }) {
   return (
-    <main style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
-      <header style={{ padding: "1rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Mythic Proportion — 3D GraphRAG (scaffold)</h1>
-        <p>Phase 0 scaffold: Vite + React + TypeScript + React Three Fiber toolchain proof.</p>
-      </header>
-      <div style={{ flex: 1 }}>
-        <Canvas camera={{ position: [3, 3, 3] }}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[5, 5, 5]} intensity={0.8} />
-          <mesh>
-            <boxGeometry args={[1, 1, 1]} />
-            <meshStandardMaterial color="orange" />
-          </mesh>
-          <OrbitControls />
-        </Canvas>
-      </div>
-    </main>
+    <div>
+      <h1>{tab}</h1>
+      <p>
+        The {tab} view is rebuilt on this design system in Phase 2 (core rebuild + data
+        migration + parity gate). This shell, its tokens, and its components are the Phase 1
+        deliverable.
+      </p>
+    </div>
+  );
+}
+
+function App() {
+  const { theme, toggle } = useTheme();
+  const [activeTab, setActiveTab] = useState<TabName>(TABS[0]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const hash = useHashRoute();
+
+  if (hash === "#/design") {
+    return (
+      <TooltipProvider>
+        <div style={{ padding: "var(--space-5)" }}>
+          <DesignPreview />
+        </div>
+      </TooltipProvider>
+    );
+  }
+
+  return (
+    <TooltipProvider>
+      <AppShell
+        theme={theme}
+        onToggleTheme={toggle}
+        onOpenPalette={() => setPaletteOpen(true)}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+      >
+        <TabPlaceholder tab={activeTab} />
+      </AppShell>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        onSelectTab={setActiveTab}
+      />
+    </TooltipProvider>
   );
 }
 

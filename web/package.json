@@ -7,20 +7,33 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.19",
+    "@radix-ui/react-tooltip": "^1.2.12",
+    "@react-three/drei": "^9.114.3",
+    "@react-three/fiber": "^8.17.10",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "culori": "^4.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.169.0",
-    "@react-three/fiber": "^8.17.10",
-    "@react-three/drei": "^9.114.3"
+    "three": "^0.169.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/culori": "^4.0.1",
+    "@types/node": "^22.20.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
-    "vite": "^5.4.10"
+    "vite": "^5.4.10",
+    "vitest": "^4.1.10"
   }
 }

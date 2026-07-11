@@ -1,0 +1,16 @@
+.mp-app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.mp-app-shell-subheader {
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-bg);
+}
+
+.mp-app-shell-main {
+  flex: 1;
+  padding: var(--space-5);
+}

@@ -1,0 +1,63 @@
+/*
+ * Tier 3 — component tokens.
+ *
+ * Named per-component so a component's look can be re-themed without
+ * touching its markup/logic. Every value here resolves to a tier-2 semantic
+ * token (never a raw tier-1 primitive) so theme switching stays a single
+ * `data-theme` attribute flip.
+ */
+
+:root {
+  /* Button */
+  --button-radius: var(--radius-md);
+  --button-padding-y: var(--space-2);
+  --button-padding-x: var(--space-4);
+  --button-font-size: var(--font-size-sm);
+  --button-bg: var(--color-accent);
+  --button-bg-hover: var(--color-accent-strong);
+  --button-fg: var(--color-text-on-accent);
+  --button-bg-secondary: var(--color-bg-elevated);
+  --button-fg-secondary: var(--color-text-primary);
+  --button-border-secondary: var(--color-border);
+
+  /* Input */
+  --input-radius: var(--radius-md);
+  --input-padding-y: var(--space-2);
+  --input-padding-x: var(--space-3);
+  --input-bg: var(--color-bg-inset);
+  --input-fg: var(--color-text-primary);
+  --input-border: var(--color-border);
+  --input-border-focus: var(--color-accent);
+  --input-placeholder: var(--color-text-secondary);
+
+  /* Dialog */
+  --dialog-radius: var(--radius-lg);
+  --dialog-bg: var(--color-bg-elevated);
+  --dialog-fg: var(--color-text-primary);
+  --dialog-border: var(--color-border);
+  --dialog-shadow: var(--shadow-lg);
+  --dialog-overlay-bg: color-mix(in oklch, var(--color-bg-inset) 70%, transparent);
+
+  /* Tooltip */
+  --tooltip-bg: var(--color-bg-inset);
+  --tooltip-fg: var(--color-text-primary);
+  --tooltip-radius: var(--radius-sm);
+  --tooltip-shadow: var(--shadow-md);
+
+  /* Combobox / command palette */
+  --palette-radius: var(--radius-lg);
+  --palette-bg: var(--color-bg-elevated);
+  --palette-fg: var(--color-text-primary);
+  --palette-border: var(--color-border);
+  --palette-shadow: var(--shadow-lg);
+  --palette-item-bg-active: var(--color-accent);
+  --palette-item-fg-active: var(--color-text-on-accent);
+  --palette-item-fg-muted: var(--color-text-secondary);
+
+  /* App shell */
+  --shell-header-bg: var(--color-bg-elevated);
+  --shell-header-border: var(--color-border);
+  --shell-tab-fg: var(--color-text-secondary);
+  --shell-tab-fg-active: var(--color-text-primary);
+  --shell-tab-underline: var(--color-accent);
+}

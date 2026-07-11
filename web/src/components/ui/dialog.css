@@ -1,0 +1,55 @@
+.mp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: var(--dialog-overlay-bg);
+  animation: mp-fade-in var(--duration-fast) var(--ease-out);
+}
+
+.mp-dialog-content {
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 90vw);
+  max-height: 76vh;
+  overflow: auto;
+  background-color: var(--dialog-bg);
+  color: var(--dialog-fg);
+  border: 1px solid var(--dialog-border);
+  border-radius: var(--dialog-radius);
+  box-shadow: var(--dialog-shadow);
+  padding: var(--space-5);
+  animation: mp-scale-in var(--duration-base) var(--ease-emphasized);
+}
+
+.mp-dialog-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.mp-dialog-description {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-4);
+}
+
+@keyframes mp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mp-scale-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.97) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+}

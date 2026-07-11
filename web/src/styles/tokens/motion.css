@@ -1,0 +1,37 @@
+/*
+ * Motion tokens — durations + easings, gated on `prefers-reduced-motion`.
+ *
+ * Every animation/transition in the app MUST reference these variables
+ * rather than hardcoding a duration/easing, so the reduced-motion override
+ * block below is a single global kill switch (see src/lib/motion.ts for the
+ * matching JS-side helpers used by imperative code, e.g. R3F camera eases).
+ */
+
+:root {
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-base: 225ms;
+  --duration-slow: 350ms;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
