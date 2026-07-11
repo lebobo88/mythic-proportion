@@ -34,7 +34,7 @@ describe("AskView", () => {
     expect(screen.queryByText(/used_llm=/)).not.toBeInTheDocument();
   });
 
-  it("hits POST /api/query with the expected body and renders a populated answer", async () => {
+  it("hits POST /api/query with the expected body (mode omitted, legacy default) and renders a populated answer", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -66,11 +66,13 @@ describe("AskView", () => {
     const [, requestInit] = fetchMock.mock.calls[1];
     expect(fetchMock.mock.calls[1][0]).toBe("/api/query");
     expect(requestInit.method).toBe("POST");
+    // Phase 4 CORRECTION: `mode` has no default -- the dropdown's default
+    // selection omits the key entirely (legacy path), it is not sent as
+    // "auto".
     expect(JSON.parse(requestInit.body)).toEqual({
       question: "What is the answer?",
       use_llm: true,
       k: 8,
-      mode: "auto",
     });
 
     expect(await screen.findByText("The answer is 42.")).toBeInTheDocument();

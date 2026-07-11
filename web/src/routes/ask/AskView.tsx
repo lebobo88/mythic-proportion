@@ -3,13 +3,17 @@ import { Button, Input } from "../../components/ui";
 import { fetchConfig, runQuery, type QueryMode, type QueryResponse } from "../../lib/api";
 import "./ask.css";
 
-// Phase 4 (specs/mythic-proportion-3d-graphrag.html §Phase 4): the four
-// GraphRAG query modes plus "auto" (default -- preserves the pre-Phase-4
-// answer behavior unchanged until the graph layer has data) and an explicit
-// "legacy" escape hatch.
-const QUERY_MODES: { value: QueryMode; label: string }[] = [
-  { value: "auto", label: "Auto" },
-  { value: "legacy", label: "Legacy (hybrid search)" },
+// Phase 4 (specs/mythic-proportion-3d-graphrag.html §Phase 4), CORRECTED per
+// memory/invariants.md's "POST /api/query contract -- CORRECTION" entry:
+// `mode` has NO DEFAULT. The dropdown's own default ("" below) OMITS the
+// `mode` key entirely, which takes the exact pre-Phase-4 legacy path
+// unconditionally -- every other option sends an explicit `mode` value
+// (including explicit "auto", now an opt-in heuristic dispatch rather than
+// the default).
+const QUERY_MODES: { value: QueryMode | ""; label: string }[] = [
+  { value: "", label: "Default (legacy, no mode sent)" },
+  { value: "legacy", label: "Legacy (hybrid search, explicit)" },
+  { value: "auto", label: "Auto (heuristic dispatch)" },
   { value: "global", label: "Global (community reports)" },
   { value: "local", label: "Local (neighborhood)" },
   { value: "drift", label: "DRIFT (primer + follow-ups)" },
@@ -22,7 +26,7 @@ const QUERY_MODES: { value: QueryMode; label: string }[] = [
 export function AskView() {
   const [question, setQuestion] = useState("");
   const [useLlm, setUseLlm] = useState(true);
-  const [mode, setMode] = useState<QueryMode>("auto");
+  const [mode, setMode] = useState<QueryMode | "">("");
   const [answer, setAnswer] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +44,7 @@ export function AskView() {
     setLoading(true);
     setError(null);
     try {
-      const result = await runQuery(q, useLlm, 8, mode);
+      const result = await runQuery(q, useLlm, 8, mode === "" ? undefined : mode);
       setAnswer(result);
     } catch (err) {
       setError(`Query failed: ${String(err)}`);
@@ -78,7 +82,7 @@ export function AskView() {
         Query mode:{" "}
         <select
           value={mode}
-          onChange={(event) => setMode(event.target.value as QueryMode)}
+          onChange={(event) => setMode(event.target.value as QueryMode | "")}
           aria-label="Query mode"
         >
           {QUERY_MODES.map((option) => (

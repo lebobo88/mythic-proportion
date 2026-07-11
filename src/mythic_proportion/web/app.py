@@ -51,11 +51,16 @@ class QueryRequest(BaseModel):
     question: str
     use_llm: bool = True
     k: int = 8
-    #: Phase 4: "auto" (default) preserves pre-Phase-4 behavior exactly until
-    #: the graph layer has data (see ``query.engine._resolve_mode``); the
-    #: Ask view's mode dropdown otherwise sends one of "legacy"/"global"/
-    #: "local"/"drift"/"activation" explicitly.
-    mode: str = "auto"
+    #: Phase 4, CORRECTED per memory/invariants.md's "POST /api/query
+    #: contract -- CORRECTION" entry: `mode` has NO DEFAULT. A request that
+    #: omits this key entirely always takes the exact pre-Phase-4 legacy
+    #: path (`api_query` below never even passes a mode through to
+    #: `answer_query` in that case) -- unconditionally, regardless of graph
+    #: state. Explicit "auto" opts in to heuristic dispatch; explicit
+    #: "legacy"/"global"/"local"/"drift"/"activation" force that path. The
+    #: Ask view's mode dropdown sends an explicit value; its own default
+    #: (no selection) omits the key entirely.
+    mode: str | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -201,6 +206,12 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
 
     @app.post("/api/query")
     def api_query(req: QueryRequest) -> dict[str, Any]:
+        # Binding contract (memory/invariants.md, "POST /api/query contract --
+        # CORRECTION"): whether the request carried an explicit `mode` key is
+        # a static property of THIS request, decided once, here -- never
+        # re-derived from vault/graph state. `explicit_mode` gates every
+        # place below that would add a new (strictly additive) response key.
+        explicit_mode = req.mode is not None
         current_settings = app.state.settings
         try:
             answer = answer_query(
@@ -218,20 +229,40 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             with IndexStore(vault_root, embedder) as store:
                 store.reindex(vault_root)
                 hits = hybrid_search(store, req.question, k=req.k)
-            return {
+            response: dict[str, Any] = {
                 "text": f"LLM unavailable via AuthHub at {authhub_base_url(current_settings)}: {exc}",
                 "citations": [],
                 "hits": [asdict(hit) for hit in hits],
                 "used_llm": False,
                 "error": True,
             }
-        return {
+            if explicit_mode:
+                # `resolved` is unknown here -- the exception may have been
+                # raised before/without a mode resolution completing -- so
+                # only `requested` (what the caller asked for) is surfaced.
+                response["mode"] = req.mode
+                response["mode_detail"] = {"requested": req.mode, "resolved": None}
+                for hit in response["hits"]:
+                    hit["source_kind"] = "page"
+            return response
+
+        response = {
             "text": answer.text,
             "citations": answer.citations,
             "hits": [asdict(hit) for hit in answer.hits],
             "used_llm": answer.used_llm,
             "error": False,
         }
+        if explicit_mode:
+            # Omitted-mode requests (`explicit_mode` False) never reach this
+            # branch -- their response is exactly the legacy 5-key dict
+            # above, with no `mode`/`mode_detail` keys and no `source_kind`
+            # on any hit, per the binding legacy-shape contract.
+            response["mode"] = req.mode
+            response["mode_detail"] = {"requested": req.mode, "resolved": answer.resolved_mode}
+            for hit in response["hits"]:
+                hit["source_kind"] = "page"
+        return response
 
     @app.get("/api/graph")
     def api_graph(mode: str = "wikilinks") -> dict[str, Any]:

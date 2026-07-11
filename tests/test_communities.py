@@ -24,7 +24,10 @@ from mythic_proportion.graph.reports import (
     generate_community_reports,
     parse_community_report_response,
 )
-from mythic_proportion.graph.store import GraphStore
+from mythic_proportion.graph.store import GraphStore, ensure_graph_vec_tables
+from mythic_proportion.index.embeddings import HashEmbedder
+from mythic_proportion.index.store import IndexStore
+from mythic_proportion.vault.init import init_vault
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "src" / "mythic_proportion" / "index" / "schema.sql"
 
@@ -250,6 +253,48 @@ def test_replace_communities_prunes_stale_reports_for_clusters_that_disappear() 
     # regeneration has even run.
     assert store.get_community_report(0, 1) is None
     assert store.get_community_report(0, 0) is not None
+
+
+def test_replace_communities_prunes_stale_report_vectors_alongside_the_report_row(
+    tmp_path: Path,
+) -> None:
+    """Strengthens the prune test above: a stale ``community_reports`` row's
+    matching ``report_vectors`` row must be deleted in the same atomic
+    ``replace_communities`` transaction too, not merely the ``community_reports``
+    row itself (see :meth:`GraphStore._prune_stale_community_reports`).
+    Skipped when the ``sqlite-vec`` extension isn't installed on this host,
+    since ``report_vectors`` only exists once vectors are active -- see
+    ``test_reindex_graph_embeds_text_units_when_vec_active`` for the same
+    skip pattern."""
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    embedder = HashEmbedder(dim=16)
+
+    with IndexStore(vault, embedder, use_vec=None) as store:
+        if not store.vec_active:
+            pytest.skip("sqlite-vec extension unavailable on this host")
+        ensure_graph_vec_tables(store.conn, vec_active=store.vec_active, dim=embedder.dim)
+
+        store = GraphStore(store.conn)
+        a = store.upsert_entity("Ada Lovelace", "PERSON", "a mathematician")
+        b = store.upsert_entity("Charles Babbage", "PERSON", "an inventor")
+
+        store.replace_communities([(0, 0, None, a), (0, 1, None, b)])
+        report_0_id = store.upsert_community_report(0, 0, "Cluster Zero", "summary-0", "full-0", 5.0)
+        report_1_id = store.upsert_community_report(0, 1, "Cluster One", "summary-1", "full-1", 5.0)
+        store.upsert_report_vector(report_0_id, [0.1] * embedder.dim, vec_active=True)
+        store.upsert_report_vector(report_1_id, [0.2] * embedder.dim, vec_active=True)
+
+        conn = store._conn  # noqa: SLF001 - test-only direct read of the vec0 table
+        assert conn.execute("SELECT COUNT(*) AS n FROM report_vectors").fetchone()["n"] == 2
+
+        # Re-cluster: cluster 1 disappears entirely.
+        store.replace_communities([(0, 0, None, a), (0, 0, None, b)])
+
+        remaining_vector_ids = {
+            int(row["rowid"]) for row in conn.execute("SELECT rowid FROM report_vectors")
+        }
+        assert remaining_vector_ids == {report_0_id}
 
 
 def test_replace_communities_keeps_reports_for_surviving_clusters_untouched() -> None:

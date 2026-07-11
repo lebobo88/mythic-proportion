@@ -430,6 +430,18 @@ class GraphStore:
         the full ``communities`` table) is deliberately cheap-and-simple at
         personal-vault scale rather than diffing, matching upstream
         GraphRAG's own choice.
+
+        Known accepted race (documented, not fixed -- cross-vendor review
+        flagged this; no locking added deliberately): if a concurrent
+        caller is mid-way through :func:`mythic_proportion.graph.reports.generate_community_reports`
+        for the *old* clustering while this method replaces it, that
+        caller's subsequent ``upsert_community_report``/``upsert_report_vector``
+        calls can re-insert a report for a ``(level, cluster)`` this
+        transaction just pruned -- a narrow "report resurrection" window.
+        This app is single-user/local (one `mythic index-graph`/`compute
+        communities` invocation at a time, in practice), so the risk is
+        judged low enough not to warrant a lock; revisit only if
+        `index-graph`/report generation ever becomes concurrent-multi-caller.
         """
         surviving = {(level, cluster) for level, cluster, _parent, _entity in rows}
         self._conn.execute("BEGIN IMMEDIATE")

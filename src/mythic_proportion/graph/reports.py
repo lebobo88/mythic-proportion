@@ -135,7 +135,16 @@ def generate_community_reports(
     report is written unconditionally into ``community_reports`` (an
     upsert), but the LLM call itself is a no-op (cache hit) whenever the
     community's member set -- and therefore its prompt -- hasn't changed
-    since the last run."""
+    since the last run.
+
+    Known accepted race (documented, not fixed -- see
+    :meth:`mythic_proportion.graph.store.GraphStore.replace_communities`'s
+    docstring for the matching note): a concurrent
+    :meth:`~mythic_proportion.graph.store.GraphStore.replace_communities`
+    call that prunes a ``(level, cluster)`` this loop is still iterating
+    over can cause this loop's ``upsert_community_report`` to resurrect a
+    report for a now-nonexistent cluster. Single-user/local usage makes
+    this low-risk in practice; no locking added deliberately."""
     store = GraphStore(conn)
     cache = cache if cache is not None else LlmCache(conn)
     report = CommunityReportsRunReport()

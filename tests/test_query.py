@@ -256,10 +256,11 @@ def test_cli_query_lowercase_title_is_not_swallowed_by_rich_markup(tmp_path: Pat
 # --------------------------------------------------------------------------
 
 
-def test_auto_mode_with_no_graph_data_preserves_legacy_hybrid_search_behavior(tmp_path: Path) -> None:
-    """The load-bearing regression: every pre-Phase-4 caller (default
-    ``mode="auto"``, never having run ``index-graph``) must observe zero
-    behavior change."""
+def test_omitted_mode_unconditionally_takes_the_legacy_path(tmp_path: Path) -> None:
+    """CORRECTED per memory/invariants.md's "POST /api/query contract --
+    CORRECTION" entry: the load-bearing regression is that omitting ``mode``
+    entirely (every pre-Phase-4 caller) must ALWAYS take the exact legacy
+    path -- unconditionally, never contingent on graph/communities state."""
     vault = _seed_vault(tmp_path)
     client = FakeAnswerClient(AnswerResult(text="legacy answer", citations=[]))
 
@@ -267,7 +268,27 @@ def test_auto_mode_with_no_graph_data_preserves_legacy_hybrid_search_behavior(tm
 
     assert answer.used_llm is True
     assert answer.text == "legacy answer"
+    assert answer.resolved_mode is None
     assert client.calls  # the legacy tool-calling AnswerClient was actually used
+
+
+def test_omitted_mode_takes_the_legacy_path_even_when_graph_data_exists(tmp_path: Path) -> None:
+    """The binding invariant is a STATIC property of the call, not a runtime
+    property of vault state: unlike explicit ``mode="auto"``, an omitted
+    ``mode`` must stay on the legacy path even once graph data exists."""
+    vault = _seed_vault(tmp_path)
+    with IndexStore(vault, HashEmbedder(dim=32), use_vec=False) as store:
+        graph_store = GraphStore(store.conn)
+        a = graph_store.upsert_entity("A", "CONCEPT", "")
+        b = graph_store.upsert_entity("B", "CONCEPT", "")
+        graph_store.upsert_relationship(a, b, "related", "", 1.0)
+
+    client = FakeAnswerClient(AnswerResult(text="still legacy", citations=[]))
+    answer = answer_query(vault, "give me an overview of everything", client=client)
+
+    assert answer.text == "still legacy"
+    assert answer.resolved_mode is None
+    assert client.calls  # legacy AnswerClient used, not the graph ExtractionClient
 
 
 def test_explicit_legacy_mode_forces_legacy_path_even_with_graph_data_present(tmp_path: Path) -> None:
@@ -303,6 +324,9 @@ def test_explicit_local_mode_routes_through_the_graph_extraction_client(tmp_path
 
 
 def test_auto_mode_routes_to_global_for_an_overview_question_once_graph_data_exists(tmp_path: Path) -> None:
+    """Explicit ``mode="auto"`` (opt-in heuristic dispatch) is what carries
+    the state-dependent behavior; an omitted ``mode`` never does (see the
+    two omitted-mode tests above)."""
     vault = _seed_vault(tmp_path)
     with IndexStore(vault, HashEmbedder(dim=32), use_vec=False) as store:
         graph_store = GraphStore(store.conn)
@@ -321,9 +345,12 @@ def test_auto_mode_routes_to_global_for_an_overview_question_once_graph_data_exi
         return '{"answer": "global auto answer"}'
 
     graph_client = FakeExtractionClient(_fixture)
-    answer = answer_query(vault, "give me an overview of everything", graph_client=graph_client)
+    answer = answer_query(
+        vault, "give me an overview of everything", mode="auto", graph_client=graph_client
+    )
 
     assert answer.text == "global auto answer"
+    assert answer.resolved_mode == "global"
 
 
 def test_unknown_mode_raises_value_error(tmp_path: Path) -> None:

@@ -38,6 +38,9 @@ export interface SearchHit {
   snippet: string;
   snippet_html: string;
   tier: string;
+  //: Only present when the /api/query request carried an explicit `mode`
+  //: key (see QueryResponse.mode below) -- strictly additive.
+  source_kind?: string;
 }
 
 export interface QueryResponse {
@@ -46,11 +49,19 @@ export interface QueryResponse {
   hits: SearchHit[];
   used_llm: boolean;
   error: boolean;
+  //: Present if and only if the request included an explicit `mode` key --
+  //: an omitted-`mode` request always gets the exact legacy 5-key shape
+  //: above with no `mode`/`mode_detail` keys (see
+  //: memory/invariants.md's "POST /api/query contract -- CORRECTION").
+  mode?: QueryMode;
+  mode_detail?: { requested: QueryMode; resolved: string | null };
 }
 
-// Phase 4: query modes exposed by the Ask view's mode dropdown -- "auto"
-// (default) preserves the legacy answer behavior unchanged until the graph
-// layer has data (see src/mythic_proportion/query/engine.py `_resolve_mode`).
+// Phase 4: query modes exposed by the Ask view's mode dropdown. `mode` has
+// NO DEFAULT -- omitting it entirely (the dropdown's own default selection)
+// takes the exact pre-Phase-4 legacy path unconditionally; explicit "auto"
+// opts in to legacy-until-graph-data-exists heuristic dispatch (see
+// src/mythic_proportion/query/engine.py `_resolve_mode`).
 export type QueryMode = "auto" | "legacy" | "global" | "local" | "drift" | "activation";
 
 export interface GraphNode {
@@ -188,12 +199,19 @@ export async function runQuery(
   question: string,
   useLlm: boolean,
   k = 8,
-  mode: QueryMode = "auto",
+  mode?: QueryMode,
 ): Promise<QueryResponse> {
+  // `mode` is omitted from the body entirely when undefined -- required by
+  // the legacy-shape contract: an OMITTED `mode` key (not merely a falsy
+  // one) is what selects the exact pre-Phase-4 legacy path server-side.
+  const body: Record<string, unknown> = { question, use_llm: useLlm, k };
+  if (mode !== undefined) {
+    body.mode = mode;
+  }
   const res = await fetch("/api/query", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, use_llm: useLlm, k, mode }),
+    body: JSON.stringify(body),
   });
   return res.json();
 }

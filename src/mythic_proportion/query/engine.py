@@ -22,11 +22,20 @@ Phase 4 adds ``mode: "global" | "local" | "drift" | "activation" | "auto"``
 GraphRAG modes routes entirely through the graph layer instead (and through a
 prompted-strict-JSON :class:`~mythic_proportion.graph.extract.ExtractionClient`,
 not the tool-calling ``AnswerClient`` -- see ``query.modes``'s module
-docstring). ``mode="auto"`` (the default) preserves the legacy behavior
-exactly whenever the graph layer has never been populated (``entities`` is
-empty) -- every pre-Phase-4 caller/test that never runs ``index-graph``
-observes zero behavior change -- and only picks a GraphRAG mode once graph
-data actually exists.
+docstring).
+
+``mode`` has **no default** here (``None``) and its handling is a *static*
+property of the call, never a runtime property of vault/graph state:
+``mode=None`` (the caller omitted it entirely) always takes the exact
+pre-Phase-4 legacy path, unconditionally, regardless of whether the graph
+layer has data. Explicit ``mode="auto"`` is the opt-in heuristic dispatch --
+it resolves to the legacy path only while the graph layer has never been
+populated, then auto-picks a GraphRAG mode once graph data exists. Explicit
+``mode="legacy"`` forces the legacy path unconditionally; explicit
+``mode="global"|"local"|"drift"|"activation"`` forces that one GraphRAG mode
+unconditionally. See ``memory/invariants.md``'s "mythic-proportion `POST
+/api/query` contract -- CORRECTION" entry for the binding contract this
+resolves against.
 """
 
 from __future__ import annotations
@@ -65,12 +74,22 @@ _GLOBAL_KEYWORDS = ("overview", "summary", "summarize", "overall", "in general",
 
 @dataclass
 class QueryAnswer:
-    """The full outcome of one ``answer_query`` call."""
+    """The full outcome of one ``answer_query`` call.
+
+    ``resolved_mode`` is ``None`` whenever the legacy path was taken
+    (including the omitted-``mode``/legacy-contract case) and one of
+    :data:`GRAPH_MODES` otherwise. It is always populated by
+    :func:`answer_query`; callers that must preserve the exact legacy
+    response shape (e.g. ``web.app.api_query`` on an omitted-``mode``
+    request) simply don't surface it -- this field itself is strictly
+    additive and never part of the legacy contract.
+    """
 
     text: str
     citations: list[str] = field(default_factory=list)
     hits: list[SearchHit] = field(default_factory=list)
     used_llm: bool = False
+    resolved_mode: str | None = None
 
 
 def _default_client(settings: Settings) -> AnswerClient:
@@ -136,19 +155,23 @@ def _read_hot(vault_root: Path) -> str:
     return hot_path.read_text(encoding="utf-8") if hot_path.is_file() else ""
 
 
-def _resolve_mode(mode: str, question: str, *, has_graph_data: bool) -> str | None:
+def _resolve_mode(mode: str | None, question: str, *, has_graph_data: bool) -> str | None:
     """Resolve a caller-supplied ``mode`` into one of :data:`GRAPH_MODES`, or
     ``None`` meaning "the legacy hybrid-search + AnswerClient path".
 
-    ``"auto"`` (the default) is the load-bearing case: it resolves to
-    ``None`` whenever the graph layer has never been populated
-    (``has_graph_data`` is False) -- so every caller that never runs
-    ``index-graph`` observes the exact pre-Phase-4 behavior, unchanged. Once
-    graph data exists, a small keyword heuristic picks GLOBAL for
-    broad/overview-shaped questions and LOCAL otherwise (DRIFT/activation are
-    only reachable via an explicit ``mode=`` -- "auto" never guesses either,
-    since both are more expensive multi-step flows).
+    ``mode is None`` (the caller omitted the key entirely) is the load-bearing
+    legacy-contract case: it **unconditionally** returns ``None``, regardless
+    of ``has_graph_data`` -- this is a static property of the call, not a
+    runtime property of vault state (see the module docstring / binding
+    invariant). Explicit ``mode="auto"`` is the *opt-in* heuristic: it
+    resolves to ``None`` only while the graph layer has never been populated,
+    then picks GLOBAL for broad/overview-shaped questions and LOCAL otherwise
+    once graph data exists (DRIFT/activation are only reachable via an
+    explicit ``mode=`` -- "auto" never guesses either, since both are more
+    expensive multi-step flows).
     """
+    if mode is None:
+        return None
     if mode == "auto":
         if not has_graph_data:
             return None
@@ -163,8 +186,14 @@ def _resolve_mode(mode: str, question: str, *, has_graph_data: bool) -> str | No
     raise ValueError(f"unknown query mode {mode!r}: expected one of auto|legacy|{'|'.join(GRAPH_MODES)}")
 
 
-def _mode_result_to_answer(result: ModeResult) -> QueryAnswer:
-    return QueryAnswer(text=result.text, citations=result.citations, hits=[], used_llm=result.used_llm)
+def _mode_result_to_answer(result: ModeResult, *, resolved_mode: str) -> QueryAnswer:
+    return QueryAnswer(
+        text=result.text,
+        citations=result.citations,
+        hits=[],
+        used_llm=result.used_llm,
+        resolved_mode=resolved_mode,
+    )
 
 
 def answer_query(
@@ -173,7 +202,7 @@ def answer_query(
     *,
     k: int = 8,
     use_llm: bool = True,
-    mode: str = "auto",
+    mode: str | None = None,
     client: AnswerClient | None = None,
     graph_client: ExtractionClient | None = None,
     settings: Settings | None = None,
@@ -190,11 +219,13 @@ def answer_query(
     client is configured, or the chosen client raises,
     :class:`~mythic_proportion.query.client.AnswerError` propagates.
 
-    ``mode`` selects the retrieval strategy: ``"auto"`` (default) preserves
-    the exact legacy hybrid-search behavior until the graph layer has data,
-    then auto-picks a GraphRAG mode; ``"legacy"`` forces the pre-Phase-4 path
-    unconditionally; ``"global"``/``"local"``/``"drift"``/``"activation"``
-    force one specific GraphRAG mode (see :mod:`mythic_proportion.query.modes`).
+    ``mode`` selects the retrieval strategy and has **no default**:
+    ``None`` (the caller omitted it entirely) unconditionally forces the
+    exact pre-Phase-4 legacy path, regardless of graph state; explicit
+    ``"auto"`` opts in to legacy-until-graph-data-exists heuristic dispatch;
+    ``"legacy"`` forces the pre-Phase-4 path unconditionally; explicit
+    ``"global"``/``"local"``/``"drift"``/``"activation"`` force one specific
+    GraphRAG mode (see :mod:`mythic_proportion.query.modes`).
     """
     vault_root = Path(vault_root)
     settings = settings or load_settings(vault_root)
@@ -252,7 +283,7 @@ def answer_query(
                     embedder=embedder,
                     vec_active=store.vec_active,
                 )
-            return _mode_result_to_answer(mode_result)
+            return _mode_result_to_answer(mode_result, resolved_mode=resolved_mode)
 
         hits = hybrid_search(store, question, k=k)
         body_by_path = {hit.page_path: store.get_body(hit.page_path) for hit in hits}

@@ -231,9 +231,15 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     assert "Hybrid Retrieval" in answer.citations
 
 
-def test_api_query_default_mode_is_auto_and_preserves_legacy_behavior(tmp_path: Path, monkeypatch) -> None:
-    """Phase 4: omitting `mode` entirely (every pre-Phase-4 caller) must
-    still resolve to the exact legacy never-500 behavior."""
+def test_api_query_omitted_mode_returns_exact_legacy_shape_unconditionally(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CORRECTED per memory/invariants.md's "POST /api/query contract --
+    CORRECTION" entry: omitting `mode` entirely (every pre-Phase-4 caller)
+    must ALWAYS take the exact legacy path and return the exact legacy
+    5-key shape -- no `mode`/`mode_detail` keys, and no `source_kind` on
+    any hit -- unconditionally, never contingent on graph/communities
+    state."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
 
@@ -245,6 +251,30 @@ def test_api_query_default_mode_is_auto_and_preserves_legacy_behavior(tmp_path: 
     data = response.json()
     assert data["used_llm"] is False
     assert data["error"] is True
+    assert set(data.keys()) == {"text", "citations", "hits", "used_llm", "error"}
+    assert "mode" not in data
+    assert "mode_detail" not in data
+    for hit in data["hits"]:
+        assert "source_kind" not in hit
+
+
+def test_api_query_explicit_mode_surfaces_mode_and_source_kind(tmp_path: Path, monkeypatch) -> None:
+    """The counterpart to the omitted-mode test above: an explicit `mode`
+    key must surface `mode`/`mode_detail` in the response, and
+    `source_kind` on every hit."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "how does hybrid retrieval work?", "mode": "legacy"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "legacy"
+    assert "mode_detail" in data
+    for hit in data["hits"]:
+        assert hit["source_kind"] == "page"
 
 
 def test_api_query_unknown_mode_never_500s(tmp_path: Path) -> None:
@@ -257,6 +287,9 @@ def test_api_query_unknown_mode_never_500s(tmp_path: Path) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["error"] is True
+    # An explicit (even invalid) `mode` key still counts as "explicit" for
+    # response-shape purposes.
+    assert data["mode"] == "not-a-real-mode"
 
 
 def test_api_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
