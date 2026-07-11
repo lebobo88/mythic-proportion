@@ -208,3 +208,94 @@ describe("no phantom r3f-forcegraph dependency (reflexion critique item 3 / ADR-
     }
   });
 });
+
+// Codex finding (BLOCKING, live-Chrome hardening pass): Graph3DScene.tsx's
+// tick subscriber (~old lines 98-101, `latestPositionsRef`) used to call
+// `map.set(ids[i], [positions[i * 3], ...])` -- a fresh `[x, y, z]` array
+// allocation PER NODE PER TICK. Fixed by reusing a single flat Float32Array
+// bulk-copied via `.set(positions)` once per tick; per-id reads only happen
+// on discrete, low-frequency triggers (selection change / layout "end" /
+// the community-hull interval), never inside the tick callback itself.
+describe("zero-allocation tick path (Codex finding)", () => {
+  it("Graph3DScene's onTick subscriber never allocates a [x, y, z] tuple per node", () => {
+    const source = readSource("Graph3DScene.tsx");
+    const onTickBody =
+      /layout\.onTick\(\(positions, ids, _alpha, revision\) => \{([\s\S]*?)\n {4}\}\);/.exec(source)?.[1] ?? "";
+    expect(onTickBody.length).toBeGreaterThan(0);
+    // The old, rejected pattern: a fresh array literal built per node.
+    expect(onTickBody).not.toMatch(/\.set\(ids\[i\],\s*\[/);
+    expect(onTickBody).not.toMatch(/new Map<string, \[number, number, number\]>\(\)/);
+    // The new pattern: one bulk typed-array copy per tick, not per node.
+    expect(onTickBody).toMatch(/buf\.set\(positions\)/);
+  });
+
+  it("per-id position reads happen through an accessor, not by rebuilding a Map every tick", () => {
+    const source = readSource("Graph3DScene.tsx");
+    expect(source).toMatch(/positionsAccessorRef/);
+    expect(source).toMatch(/latestPositionsBufferRef/);
+  });
+});
+
+// Issue 2 (BLOCKING): most nodes started off-screen because nothing ever
+// moved the camera to frame the graph after the layout settled.
+describe("camera fit-to-graph on load (Issue 2)", () => {
+  it("Graph3DScene computes a bounding-sphere fit request once the worker layout ends (onEngineStop)", () => {
+    const source = readSource("Graph3DScene.tsx");
+    expect(source).toMatch(/layout\.onEnd\(/);
+    expect(source).toMatch(/setFitRequest\(/);
+  });
+
+  it("CameraRig accepts and animates toward a fitRequest bounding-sphere prop, independent of single-node focus", () => {
+    const source = readSource("CameraRig.tsx");
+    expect(source).toMatch(/fitRequest/);
+    expect(source).toMatch(/GraphFitRequest/);
+  });
+});
+
+// Issue 3a (BLOCKING): progressive disclosure must be the DEFAULT, and it
+// must actually bound what reaches the GPU (InstancedMesh2 capacity /
+// buffer sizes), not merely toggle a per-instance `visible` flag on an
+// otherwise full-size allocation.
+describe("progressive disclosure is the default + actually bounds GPU push (Issue 3a)", () => {
+  it("GraphView's disclosure cap sits in the requested ~1000-2000 top-degree-node range", () => {
+    const source = readFileSync(join(__dirname, "..", "GraphView.tsx"), "utf-8");
+    const match = /PROGRESSIVE_DISCLOSURE_CAP = (\d+)/.exec(source);
+    expect(match).not.toBeNull();
+    const cap = Number(match![1]);
+    expect(cap).toBeGreaterThanOrEqual(1000);
+    expect(cap).toBeLessThanOrEqual(2000);
+  });
+
+  it("selecting a node also expands its neighbors into view, not just the node itself", () => {
+    const source = readFileSync(join(__dirname, "..", "GraphView.tsx"), "utf-8");
+    expect(source).toMatch(/for \(const neighborId of neighborsOf\(rawData, id\)\) next\.add\(neighborId\)/);
+  });
+
+  it("Graph3DScene feeds InstancedNodes/InstancedEdges/NodeLabels a bounded, visibleIds-filtered node/edge set (not the full dataset)", () => {
+    const source = readSource("Graph3DScene.tsx");
+    expect(source).toMatch(/const renderedNodes = useMemo\(\(\) => nodes\.filter\(\(n\) => visibleIds\.has\(n\.id\)\)/);
+    expect(source).toMatch(
+      /const renderedEdges = useMemo\(\s*\(\) => edges\.filter\(\(e\) => visibleIds\.has\(e\.source\) && visibleIds\.has\(e\.target\)\)/,
+    );
+    expect(source).toMatch(/<InstancedNodes[\s\S]*?nodes=\{renderedNodes\}/);
+    expect(source).toMatch(/<InstancedEdges[\s\S]*?edges=\{renderedEdges\}/);
+  });
+});
+
+// Issue 3c (BLOCKING): troika-three-text labels must be hard-capped --
+// never one Text mesh per node.
+describe("troika node labels are capped, never one-per-node (Issue 3c)", () => {
+  it("NodeLabels hard-caps the labeled set via a maxLabels budget, not one label per node", () => {
+    const source = readSource("NodeLabels.tsx");
+    expect(source).toMatch(/DEFAULT_MAX_LABELS = 40/);
+    expect(source).toMatch(/labeledNodes/);
+    expect(source).toMatch(/out\.slice\(0, maxLabels\)/);
+    // No naive "one <Text> per node" render path.
+    expect(source).not.toMatch(/nodes\.map\(\(node\) => <Text/);
+  });
+
+  it("labeled-node selection always includes the hovered/selected node ids when present", () => {
+    const source = readSource("NodeLabels.tsx");
+    expect(source).toMatch(/for \(const id of \[selectedId, hoveredId\]\)/);
+  });
+});

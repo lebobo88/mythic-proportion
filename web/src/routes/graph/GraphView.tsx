@@ -13,7 +13,16 @@ import { Graph3DScene } from "./three/Graph3DScene";
 import { GraphA11yTree } from "./a11y/GraphA11yTree";
 import "./graph.css";
 
-const PROGRESSIVE_DISCLOSURE_START = 40;
+// Issue 3a (BLOCKING, live-Chrome context-loss finding): the DEFAULT initial
+// render must be a bounded subset, not the full 10k/50k-node dataset --
+// pushing everything to the GPU at once is what tripped
+// `THREE.WebGLRenderer: Context Lost.` at 10k nodes. 1500 sits inside the
+// requested ~1000-2000 top-degree-node range: comfortably interactive with
+// the LOD/instancing/culling budget in InstancedNodes.tsx + InstancedEdges.tsx,
+// while still showing a meaningfully large hub neighborhood by default.
+// Selecting a node expands ITS neighbors into view too (see `selectNode`
+// below), so exploring beyond the cap is always one click away.
+const PROGRESSIVE_DISCLOSURE_CAP = 1500;
 
 // Graph view: consumes GET /api/graph?mode=both (Phase 3 page + GraphRAG
 // entity/relationship data), rendered either as the Phase 5 3D WebGL scene
@@ -72,7 +81,7 @@ export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }
   // node's neighbors into view on selection (deliverable 8).
   const baseVisibleIds = useMemo(() => {
     const sorted = [...vizData.nodes].sort((a, b) => b.degree! - a.degree!);
-    const top = sorted.slice(0, PROGRESSIVE_DISCLOSURE_START).map((n) => n.id);
+    const top = sorted.slice(0, PROGRESSIVE_DISCLOSURE_CAP).map((n) => n.id);
     return new Set([...top, ...expandedIds]);
   }, [vizData.nodes, expandedIds]);
 
@@ -91,14 +100,22 @@ export function GraphView({ onOpenPage }: { onOpenPage: (path: string) => void }
     [rawData, hoveredId, selectedId],
   );
 
-  const selectNode = useCallback((id: string) => {
-    setSelectedId(id);
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, []);
+  // Progressive disclosure "expand on demand" (Issue 3a): selecting a node
+  // reveals that node's 1-hop neighbors too, not just the node itself --
+  // otherwise a selected node picked from outside the top-degree cap would
+  // render with all its edges dangling to invisible endpoints.
+  const selectNode = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        for (const neighborId of neighborsOf(rawData, id)) next.add(neighborId);
+        return next;
+      });
+    },
+    [rawData],
+  );
 
   // Cmd+K "jump to node" (deliverable 7) -- drains a pending request on
   // mount (palette fires before this view exists) and stays subscribed for

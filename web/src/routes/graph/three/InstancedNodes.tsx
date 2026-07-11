@@ -59,7 +59,18 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
   const idToIndex = useRef(new Map<string, number>());
   const lastMoveAt = useRef(0);
 
-  const material = useMemo(() => new MeshStandardMaterial({ vertexColors: true, roughness: 0.5 }), []);
+  // NOTE (Issue 1 fix / live-Chrome finding): InstancedMesh2 drives
+  // per-instance color entirely through its own `colorsTexture` (patched
+  // into the material's shader by the library itself the moment any
+  // `entity.color = ...` is set below) -- it does NOT use three's normal
+  // per-vertex `color` geometry attribute. Setting `vertexColors: true`
+  // here additionally told three's own MeshStandardMaterial shader to
+  // multiply in a geometry `color` attribute that GEOMETRY_NEAR/MID/FAR
+  // never define, which resolves to black and was the actual cause of the
+  // "nodes render as tiny dark squares" bug: every instance was fully
+  // correct in `colorsTexture` but then multiplied by (0,0,0). Community/
+  // type colors flow from `colorForNode` -> `entity.color` only.
+  const material = useMemo(() => new MeshStandardMaterial({ roughness: 0.5 }), []);
 
   const mesh = useMemo(() => {
     const capacity = Math.max(1, nodes.length);

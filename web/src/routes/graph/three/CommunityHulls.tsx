@@ -20,8 +20,13 @@ export function CommunityHulls({
   nodes: VizNode[];
   visibleIds: Set<string>;
   colors: GraphColors;
-  /** Latest {id -> [x,y,z]} snapshot, updated imperatively by the parent scene. */
-  positionsRef: MutableRefObject<Map<string, [number, number, number]>>;
+  /**
+   * Latest {id -> [x,y,z]} position accessor, backed by the parent scene's
+   * single reused tick buffer (see Graph3DScene's `positionsAccessorRef` --
+   * Codex zero-allocation finding): a `Map`-like `.get(id)` surface, not
+   * necessarily a real `Map`.
+   */
+  positionsRef: MutableRefObject<{ get(id: string): [number, number, number] | undefined }>;
 }) {
   const [hulls, setHulls] = useState<{ community: number; geometry: ConvexGeometry }[]>([]);
 
