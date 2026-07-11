@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS entities (
     UNIQUE(title, type)
 );
 
+-- `(source_id, target_id, type)` is the relationship *identity*: the same
+-- logical edge extracted from multiple text-units (or re-extracted across
+-- re-index passes of a changed page) must merge into one row rather than
+-- duplicate, since Phase 4's spreading-activation retrieval weights edges
+-- and `entities.degree` counts relationship rows -- see
+-- `idx_relationships_identity` below and `GraphStore.upsert_relationship`,
+-- which upserts on that identity. `type` is `NOT NULL DEFAULT ''`, so the
+-- identity is fully NULL-free and the unique index below applies cleanly.
 CREATE TABLE IF NOT EXISTS relationships (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source_id   INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
@@ -79,6 +87,13 @@ CREATE TABLE IF NOT EXISTS relationships (
 
 CREATE INDEX IF NOT EXISTS idx_relationships_source_id ON relationships(source_id);
 CREATE INDEX IF NOT EXISTS idx_relationships_target_id ON relationships(target_id);
+-- Enforces relationship identity on already-created DBs too -- unlike a
+-- `UNIQUE(...)` clause inside `CREATE TABLE IF NOT EXISTS`, a separate
+-- `CREATE UNIQUE INDEX IF NOT EXISTS` still applies retroactively when this
+-- script runs against a DB whose `relationships` table already existed
+-- without it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_relationships_identity
+    ON relationships(source_id, target_id, type);
 
 -- `page_path` deliberately mirrors `pages.page_path` (not a surrogate
 -- `page_id`) -- every other table in this schema (page_vectors, pages_fts)

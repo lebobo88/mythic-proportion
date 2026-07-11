@@ -178,12 +178,29 @@ class GraphStore:
     def upsert_relationship(
         self, source_id: int, target_id: int, type_: str, description: str, weight: float
     ) -> int:
-        self._conn.execute(
+        """Insert or merge one relationship, deduped on the identity
+        ``(source_id, target_id, type)`` enforced by
+        ``idx_relationships_identity`` in ``index/schema.sql``. The same
+        logical edge extracted from multiple text-units (or re-extracted
+        across re-index passes) merges into the surviving row instead of
+        creating a duplicate: the stronger (max) weight wins, and the
+        description is replaced only when the incoming one is non-empty
+        (empty descriptions never clobber an existing one). ``RETURNING id``
+        (not ``last_insert_rowid()``, which is wrong on the UPDATE path) is
+        used so this returns the correct id whether the row was inserted or
+        merged."""
+        row = self._conn.execute(
             "INSERT INTO relationships(source_id, target_id, type, description, weight) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(source_id, target_id, type) DO UPDATE SET "
+            "  weight = MAX(relationships.weight, excluded.weight), "
+            "  description = CASE "
+            "    WHEN excluded.description != '' THEN excluded.description "
+            "    ELSE relationships.description "
+            "  END "
+            "RETURNING id",
             (source_id, target_id, type_, description, weight),
-        )
-        row = self._conn.execute("SELECT last_insert_rowid() AS id").fetchone()
+        ).fetchone()
         self._conn.commit()
         return int(row["id"])
 

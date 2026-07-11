@@ -429,6 +429,34 @@ def test_graph_store_delete_orphan_entities_keeps_entities_with_provenance() -> 
     assert remaining_titles == {"KEPT"}
 
 
+def test_graph_store_upsert_relationship_dedups_on_source_target_type() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a_id = store.upsert_entity("A", "CONCEPT", "")
+    b_id = store.upsert_entity("B", "CONCEPT", "")
+
+    first_id = store.upsert_relationship(a_id, b_id, "RELATED", "first mention", 1.0)
+    second_id = store.upsert_relationship(a_id, b_id, "RELATED", "", 3.0)
+
+    assert first_id == second_id
+    rows = conn.execute("SELECT weight, description FROM relationships").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["weight"] == 3.0
+    # empty incoming description must not clobber the existing one.
+    assert rows[0]["description"] == "first mention"
+
+    third_id = store.upsert_relationship(a_id, b_id, "RELATED", "stronger mention", 2.0)
+    assert third_id == first_id
+    row = conn.execute("SELECT weight, description FROM relationships").fetchone()
+    # weight keeps the max seen so far, not the latest.
+    assert row["weight"] == 3.0
+    assert row["description"] == "stronger mention"
+
+    store.recompute_degree(a_id)
+    degree = conn.execute("SELECT degree FROM entities WHERE id = ?", (a_id,)).fetchone()["degree"]
+    assert degree == 1
+
+
 def test_ensure_graph_vec_tables_noop_when_vec_inactive() -> None:
     conn = _memory_conn()
     ensure_graph_vec_tables(conn, vec_active=False, dim=16)
