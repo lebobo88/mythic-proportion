@@ -23,6 +23,7 @@ from mythic_proportion.index.embeddings import HashEmbedder  # noqa: E402
 from mythic_proportion.index.store import IndexStore  # noqa: E402
 from mythic_proportion.vault.init import init_vault  # noqa: E402
 from mythic_proportion.web.app import create_app  # noqa: E402
+from mythic_proportion.web.pages import collect_pages  # noqa: E402
 from mythic_proportion.web.render import render_snippet_html  # noqa: E402
 
 
@@ -356,6 +357,11 @@ def test_api_graph_mode_entities_returns_extracted_entity_graph(tmp_path: Path) 
     llm_client = FakeExtractionClient(_seed_entity_fixture_response)
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
+        # `reindex_graph` now defaults to `collect_raw_sources` (real `raw/`
+        # ingested documents), not `collect_pages` (`wiki/`) -- these tests
+        # only ever seeded `wiki/` pages directly (no real ingest run), so
+        # the wiki-derived page list is passed explicitly to preserve their
+        # original intent (extracting entities from the seeded wiki content).
         reindex_graph(
             vault,
             store.conn,
@@ -364,6 +370,7 @@ def test_api_graph_mode_entities_returns_extracted_entity_graph(tmp_path: Path) 
             vec_active=store.vec_active,
             model="mock",
             max_gleanings=0,
+            pages=collect_pages(vault),
         )
 
     web_client = _client(vault)
@@ -389,6 +396,11 @@ def test_api_graph_mode_both_unions_pages_and_entities(tmp_path: Path) -> None:
     llm_client = FakeExtractionClient(_seed_entity_fixture_response)
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
+        # `reindex_graph` now defaults to `collect_raw_sources` (real `raw/`
+        # ingested documents), not `collect_pages` (`wiki/`) -- these tests
+        # only ever seeded `wiki/` pages directly (no real ingest run), so
+        # the wiki-derived page list is passed explicitly to preserve their
+        # original intent (extracting entities from the seeded wiki content).
         reindex_graph(
             vault,
             store.conn,
@@ -397,6 +409,7 @@ def test_api_graph_mode_both_unions_pages_and_entities(tmp_path: Path) -> None:
             vec_active=store.vec_active,
             model="mock",
             max_gleanings=0,
+            pages=collect_pages(vault),
         )
 
     web_client = _client(vault)
@@ -519,6 +532,98 @@ def _wait_for_job(client: "fastapi.testclient.TestClient", job_id: str, *, timeo
             return data
         time.sleep(0.02)
     raise AssertionError(f"job {job_id} did not finish within {timeout}s: {data}")
+
+
+def _wait_for_graph_job(client: "fastapi.testclient.TestClient", job_id: str, *, timeout: float = 5.0) -> dict:
+    """Same contract as :func:`_wait_for_job`, for `/api/index-graph/status`."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    data: dict = {}
+    while time.monotonic() < deadline:
+        response = client.get("/api/index-graph/status", params={"job_id": job_id})
+        assert response.status_code == 200
+        data = response.json()
+        if data["done"]:
+            return data
+        time.sleep(0.02)
+    raise AssertionError(f"graph job {job_id} did not finish within {timeout}s: {data}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/index-graph -- "Build Knowledge Graph" (Phase 3/4 bugfix DEFECT 1)
+# ---------------------------------------------------------------------------
+
+
+def test_api_index_graph_status_with_no_job_ever_enqueued_returns_idle_state(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/index-graph/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] is None
+    assert data["done"] is True
+    assert data["status"] == "idle"
+
+
+def test_api_index_graph_missing_credential_reports_error_and_does_not_500(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/index-graph")
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    data = _wait_for_graph_job(client, job_id)
+    assert data["status"] == "done"
+    assert data["error"] is not None
+    assert "AUTHHUB_API_KEY" in data["error"]
+
+
+def test_api_index_graph_end_to_end_populates_entities(tmp_path: Path, monkeypatch) -> None:
+    """`/api/index-graph` reads real `raw/` ingested content (bugfix
+    DEFECT 2), via the same `build_extraction_client` the CLI uses (bugfix
+    DEFECT 1) -- proven end-to-end through the actual HTTP job/status API,
+    not by calling `reindex_graph` directly."""
+    from mythic_proportion import graph as graph_package  # noqa: F401
+    import mythic_proportion.graph.index as graph_index_module
+    from mythic_proportion.graph.tuples import COMPLETION_DELIM, TUPLE_DELIM
+
+    vault = _seed_vault(tmp_path)
+    drop_dir = vault / "drop"
+    drop_dir.mkdir(parents=True, exist_ok=True)
+    (drop_dir / "note.md").write_text(
+        "Grace Hopper worked on the COBOL programming language.", encoding="utf-8"
+    )
+    from mythic_proportion.ingest.pipeline import ingest_drop
+
+    ingest_report = ingest_drop(vault)
+    assert not ingest_report.errors
+
+    fixture_response = (
+        f'("entity"{TUPLE_DELIM}Grace Hopper{TUPLE_DELIM}PERSON{TUPLE_DELIM}a computer scientist)'
+        f"{COMPLETION_DELIM}"
+    )
+
+    def _fake_build_extraction_client(settings):  # noqa: ANN001
+        return FakeExtractionClient(lambda s, u, i: COMPLETION_DELIM if "MANY entities" in u else fixture_response)
+
+    monkeypatch.setattr(graph_index_module, "build_extraction_client", _fake_build_extraction_client)
+
+    client = _client(vault)
+    response = client.post("/api/index-graph")
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    data = _wait_for_graph_job(client, job_id)
+    assert data["status"] == "done"
+    assert data["error"] is None
+    assert data["entities_upserted"] == 1
+
+    graph_response = client.get("/api/graph", params={"mode": "entities"})
+    assert any(node["label"] == "GRACE HOPPER" for node in graph_response.json()["nodes"])
 
 
 def test_api_upload_with_no_provider_configured_reports_error_and_does_not_500(

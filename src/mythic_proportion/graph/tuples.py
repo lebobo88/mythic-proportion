@@ -38,10 +38,44 @@ def strip_markdown_fences(text: str) -> str:
     return text
 
 
+def _split_balanced_paren_groups(text: str) -> list[str]:
+    """Scan ``text`` for top-level balanced ``(...)`` groups, ignoring
+    whatever separates them (e.g. a bare newline where :data:`RECORD_DELIM`
+    should have been). Used as defense-in-depth by :func:`_split_balanced_records`
+    when a completion is missing the ``##`` record delimiter entirely --
+    without this, two records separated only by ``\\n`` would be treated as
+    one blob and each record's description would absorb the literal opening
+    syntax of the next record (e.g. ``...modeling.)\\n("entity``)."""
+    groups: list[str] = []
+    depth = 0
+    start: int | None = None
+    for i, ch in enumerate(text):
+        if ch == "(":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == ")":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    groups.append(text[start : i + 1])
+                    start = None
+    return groups
+
+
 def _split_balanced_records(text: str) -> list[str]:
     """Split ``text`` on top-level ``##`` only -- i.e. never inside an open
     ``(...)`` pair -- so a record delimiter appearing inside a description
-    can't fracture that record. This is the "balanced-delimiter scan"."""
+    can't fracture that record. This is the "balanced-delimiter scan".
+
+    Defense-in-depth: if this yields at most one "record" (i.e. no top-level
+    ``##`` was found at all), but that blob actually contains more than one
+    top-level balanced ``(...)`` group, the model has produced multiple
+    records separated by something other than ``##`` (in practice: a bare
+    newline -- see :func:`build_extract_graph_prompt`'s worked example).
+    Falls back to :func:`_split_balanced_paren_groups` in that case rather
+    than silently corrupting every record after the first.
+    """
     records: list[str] = []
     depth = 0
     current: list[str] = []
@@ -67,7 +101,13 @@ def _split_balanced_records(text: str) -> list[str]:
             i += 1
     if current:
         records.append("".join(current))
-    return [r.strip() for r in records if r.strip()]
+    records = [r.strip() for r in records if r.strip()]
+
+    if len(records) <= 1:
+        groups = _split_balanced_paren_groups(text)
+        if len(groups) > 1:
+            return groups
+    return records
 
 
 def parse_tuple_records(raw_text: str) -> list[list[str]]:
@@ -131,18 +171,57 @@ def normalize_claim_status(raw_status: str) -> str:
 
 
 def build_extract_graph_prompt(text: str) -> tuple[str, str]:
-    """System/user prompt pair for one entity+relationship extraction pass."""
+    """System/user prompt pair for one entity+relationship extraction pass.
+
+    The worked example below is load-bearing, not decorative: an earlier
+    version of this prompt only ever showed the two record-shape *templates*
+    on separate lines joined by a bare ``\\n`` (never an actual multi-record
+    example joined by :data:`RECORD_DELIM`), so real model completions
+    mimicked that newline-joined shape instead of using ``##`` -- see
+    ``graph/tuples.py``'s parser, which only splits on top-level ``##``. The
+    example here explicitly shows two same-kind (entity/entity) records and
+    one different-kind (entity/relationship) transition, ALL joined by
+    ``##``, so the model's own few-shot example teaches the correct
+    delimiter.
+    """
+    example_text = (
+        "Ada Lovelace worked with Charles Babbage on the Analytical Engine. "
+        "They corresponded by letter for years."
+    )
+    example_output = RECORD_DELIM.join(
+        [
+            f'("entity"{TUPLE_DELIM}ADA LOVELACE{TUPLE_DELIM}PERSON{TUPLE_DELIM}'
+            f"A mathematician who worked on the Analytical Engine.)",
+            f'("entity"{TUPLE_DELIM}CHARLES BABBAGE{TUPLE_DELIM}PERSON{TUPLE_DELIM}'
+            f"An inventor who designed the Analytical Engine.)",
+            f'("entity"{TUPLE_DELIM}ANALYTICAL ENGINE{TUPLE_DELIM}CONCEPT{TUPLE_DELIM}'
+            f"A proposed mechanical general-purpose computer.)",
+            f'("relationship"{TUPLE_DELIM}ADA LOVELACE{TUPLE_DELIM}CHARLES BABBAGE{TUPLE_DELIM}'
+            f"Collaborated on the Analytical Engine and corresponded by letter for years."
+            f"{TUPLE_DELIM}9)",
+        ]
+    ) + COMPLETION_DELIM
+
     system = (
         "You are an information-extraction assistant building a knowledge graph "
         "from personal-wiki text. Identify every named entity and every "
         "relationship between entities in the given text.\n\n"
         f"Entity `TYPE` MUST be exactly one of: {', '.join(sorted(ENTITY_TYPES))}.\n\n"
         "Output ONLY delimited-tuple records -- nothing else, no prose, no "
-        "markdown code fences. Two record shapes, separated by "
-        f"{RECORD_DELIM}:\n"
+        "markdown code fences. Two record shapes:\n"
         f'("entity"{TUPLE_DELIM}<NAME>{TUPLE_DELIM}<TYPE>{TUPLE_DELIM}<DESCRIPTION>)\n'
         f'("relationship"{TUPLE_DELIM}<SOURCE_NAME>{TUPLE_DELIM}<TARGET_NAME>'
         f"{TUPLE_DELIM}<DESCRIPTION>{TUPLE_DELIM}<STRENGTH 1-10>)\n\n"
+        "CRITICAL: every record -- whether entity or relationship, of the "
+        f"same kind as the previous record or a different kind -- MUST be "
+        f"separated from the next record by exactly {RECORD_DELIM} and "
+        f"NOTHING ELSE. Never separate records with only a newline. Here is "
+        f"a complete, correctly-delimited worked example for the input "
+        f'"{example_text}":\n\n{example_output}\n\n'
+        "Notice every record above -- including the two consecutive entity "
+        "records and the transition from entity to relationship -- is "
+        f"joined by {RECORD_DELIM}, never by a bare newline. Your own "
+        "output must follow this exact pattern.\n\n"
         f"When you have listed everything, output exactly {COMPLETION_DELIM} "
         "and nothing after it."
     )
@@ -154,9 +233,12 @@ def build_gleaning_prompt() -> str:
     """A bounded 'did you miss any?' recall-loop continuation message."""
     return (
         "MANY entities and relationships were missed in the last extraction. "
-        "Add any missing ones now, using the exact same tuple format "
-        f"({RECORD_DELIM}-separated records). If nothing was missed, respond "
-        f"with exactly {COMPLETION_DELIM} and nothing else."
+        "Add any missing ones now, using the exact same tuple format as "
+        f"before. CRITICAL: separate every record from the next with exactly "
+        f"{RECORD_DELIM} and nothing else -- never a bare newline -- e.g. "
+        f'("entity"{TUPLE_DELIM}NAME{TUPLE_DELIM}TYPE{TUPLE_DELIM}DESC)'
+        f'{RECORD_DELIM}("entity"{TUPLE_DELIM}NAME2{TUPLE_DELIM}TYPE2{TUPLE_DELIM}DESC2). '
+        f"If nothing was missed, respond with exactly {COMPLETION_DELIM} and nothing else."
     )
 
 

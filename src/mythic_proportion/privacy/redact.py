@@ -577,15 +577,60 @@ class RedactingAnswerClient:
 class RedactingExtractionClient:
     """Wraps a GraphRAG :class:`~mythic_proportion.graph.extract.ExtractionClient`
     (``complete(system, user) -> str``) with a redact -> complete -> rehydrate
-    call path."""
+    call path.
+
+    **Turn-scoping (closes a PII cloud-egress leak).** :meth:`complete` is a
+    one-shot redact/rehydrate cycle -- correct for a single call, but GraphRAG
+    extraction is not always a single call: the repair round-trip
+    (:func:`mythic_proportion.graph.extract._parse_with_one_repair`) and the
+    gleaning recall loop (:func:`mythic_proportion.graph.extract.extract_entities_relationships`)
+    both splice a *prior completion's text* into a *new* outbound prompt for
+    the next round. If that prior text had already been rehydrated back to
+    real PII (as :meth:`complete` does), it re-enters the redaction pipeline
+    from scratch on the next call -- and Presidio measurably under-detects
+    PII in pipe-delimited-tuple-formatted text, so real names/emails could
+    reach the cloud LLM essentially unmasked on any repair/gleaning round.
+
+    :meth:`complete_turn` fixes this at the root: it redacts and calls, but
+    deliberately never rehydrates -- the returned text (and every character
+    of it that a caller later splices into a follow-up prompt) stays in
+    redacted-token form for the entire multi-round turn. Every newly-found
+    PII span is merged into the caller-supplied ``turn_map`` (shared across
+    all rounds of one turn), and only :meth:`rehydrate_turn`, called exactly
+    once at the very end of the whole turn (after the final round's tuples
+    have been parsed), is allowed to bring real PII back. See
+    ``graph.extract._start_turn``/``_finish_turn`` for the orchestration
+    side of this contract.
+    """
 
     def __init__(self, inner: Any, redactor: Redactor) -> None:
         self._inner = inner
         self._redactor = redactor
 
     def complete(self, *, system: str, user: str) -> str:
+        """One-shot redact -> complete -> rehydrate. Safe only for a caller
+        that makes exactly one completion call per redact/rehydrate cycle --
+        never splice this method's return value into a later outbound
+        prompt (use :meth:`complete_turn` instead for multi-round turns)."""
         redacted_user, rehydrate_map = self._redactor.redact(user)
         raw = self._inner.complete(system=system, user=redacted_user)
         if not rehydrate_map:
             return raw
         return self._redactor.rehydrate(raw, rehydrate_map)
+
+    def complete_turn(self, *, system: str, user: str, turn_map: dict[str, str]) -> str:
+        """Redact ``user``, merging any newly-found PII spans into the
+        shared ``turn_map`` (mutated in place), call the inner client, and
+        return the RAW completion WITHOUT rehydrating. ``user`` may itself
+        already contain ``[REDACTED_*]`` tokens spliced in from an earlier
+        round of the same turn -- that's expected and safe (they simply
+        won't match any new PII span)."""
+        redacted_user, new_map = self._redactor.redact(user)
+        turn_map.update(new_map)
+        return self._inner.complete(system=system, user=redacted_user)
+
+    def rehydrate_turn(self, text: str, turn_map: dict[str, str]) -> str:
+        """Reverse every ``[REDACTED_*]`` token in ``text`` using the
+        accumulated ``turn_map`` -- call exactly once, at the very end of a
+        :meth:`complete_turn`-orchestrated extraction turn."""
+        return self._redactor.rehydrate(text, turn_map)

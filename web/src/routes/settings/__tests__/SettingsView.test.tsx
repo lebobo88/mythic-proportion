@@ -343,6 +343,60 @@ describe("SettingsView", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  // ------------------------------------------------------------------
+  // GraphRAG extraction pipeline bugfix (DEFECT 1): auto-build toggle
+  // ------------------------------------------------------------------
+
+  it("renders the auto-build-graph toggle off by default and toggling POSTs { auto_build_graph: true }", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        provider: "authhub",
+        model: "gpt-5",
+        authhub_base_url: "",
+        route_alias: null,
+        has_api_key: true,
+        local: false,
+        redaction_enabled: true,
+        auto_build_graph: false,
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ models: ["gpt-5"], current: "gpt-5", provider: "authhub" }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        provider: "authhub",
+        model: "gpt-5",
+        authhub_base_url: "",
+        route_alias: null,
+        has_api_key: true,
+        local: false,
+        redaction_enabled: true,
+        auto_build_graph: true,
+      }),
+    });
+
+    render(<SettingsView />);
+    await screen.findByLabelText("Model");
+
+    const toggle = screen.getByLabelText(/Auto-build knowledge graph/i) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/config", expect.objectContaining({ method: "POST" })),
+    );
+    const postCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/config" && init?.method === "POST",
+    );
+    expect(JSON.parse(postCall![1].body)).toEqual({ auto_build_graph: true });
+    expect(await screen.findByText(/Auto-build knowledge graph ON/)).toBeInTheDocument();
+  });
+
   it("security invariant: never renders an API-key input field", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

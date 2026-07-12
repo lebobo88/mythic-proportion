@@ -195,6 +195,23 @@ def test_get_config_exposes_phase6_defaults(tmp_path: Path) -> None:
     assert data["ollama_base_url"] == "http://localhost:11434"
     assert data["ollama_model"] == "qwen2.5:7b-instruct"
     assert data["embeddings_backend"] == "auto"
+    # Bugfix DEFECT 1 addition: off by default (real LLM-cost concern).
+    assert data["auto_build_graph"] is False
+
+
+def test_post_config_updates_auto_build_graph_toggle(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/config", json={"auto_build_graph": True})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_build_graph"] is True
+
+    # And back off -- omitting the field on a later request leaves it
+    # untouched (matches every other Phase 6 toggle's contract).
+    response = client.post("/api/config", json={"model": "some-other-model"})
+    assert response.json()["auto_build_graph"] is True
 
 
 def test_post_config_updates_local_and_redaction_flags(tmp_path: Path) -> None:

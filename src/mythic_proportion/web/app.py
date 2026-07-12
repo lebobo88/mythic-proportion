@@ -24,7 +24,7 @@ from mythic_proportion.index.retrieve import hybrid_search
 from mythic_proportion.index.store import IndexStore
 from mythic_proportion.query.engine import answer_query
 from mythic_proportion.vault.lint import lint_fix, lint_vault
-from mythic_proportion.web.jobs import _IDLE_STATE, IngestWorker
+from mythic_proportion.web.jobs import _GRAPH_IDLE_STATE, _IDLE_STATE, IngestWorker
 from mythic_proportion.web.pages import backlinks_index, collect_pages, title_to_path_index
 from mythic_proportion.web.render import render_markdown, render_snippet_html
 
@@ -83,6 +83,9 @@ class ConfigUpdateRequest(BaseModel):
     redaction_enabled: bool | None = None
     ollama_base_url: str | None = None
     ollama_model: str | None = None
+    #: Bugfix DEFECT 1 (wiring gap) addition -- strictly additive/optional,
+    #: same shape as the other Phase 6 toggles above.
+    auto_build_graph: bool | None = None
 
 
 def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
@@ -376,6 +379,29 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             raise HTTPException(status_code=404, detail=f"job not found: {job_id!r}")
         return job
 
+    @app.post("/api/index-graph")
+    def api_index_graph() -> dict[str, Any]:
+        """Enqueue a "Build Knowledge Graph" job -- the web UI's equivalent
+        of `mythic index-graph` (bugfix DEFECT 1: that command previously
+        had no real entry point at all). Runs on the same single background
+        worker thread as ingest jobs (never concurrently with one), for the
+        same CPU-stampede/write-race reasons `web.jobs.IngestWorker`
+        already documents for ingest. Poll `GET /api/index-graph/status`
+        for progress; a real LLM-cost operation, so this is only ever
+        triggered explicitly (this endpoint) or via the opt-in
+        `auto_build_graph` Settings toggle after an ingest job.
+        """
+        job_id = app.state.ingest_worker.enqueue_graph()
+        return {"job_id": job_id}
+
+    @app.get("/api/index-graph/status")
+    def api_index_graph_status(job_id: str | None = None) -> dict[str, Any]:
+        """Current state of one graph-build job, or the most recently
+        enqueued one if `job_id` is omitted. Never 500s: mirrors
+        `GET /api/ingest/status`'s idle-state contract."""
+        job = app.state.ingest_worker.get_graph_job(job_id)
+        return job if job is not None else dict(_GRAPH_IDLE_STATE)
+
     @app.get("/api/lint")
     def api_lint() -> dict[str, Any]:
         report = lint_vault(vault_root)
@@ -429,6 +455,8 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             "ollama_base_url": current_settings.ollama_base_url,
             "ollama_model": current_settings.ollama_model,
             "embeddings_backend": current_settings.embeddings_backend,
+            # Bugfix DEFECT 1 addition -- strictly additive.
+            "auto_build_graph": current_settings.auto_build_graph,
         }
 
     @app.post("/api/config")
@@ -457,6 +485,9 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
 
         if req.redaction_enabled is not None:
             update["redaction_enabled"] = req.redaction_enabled
+
+        if req.auto_build_graph is not None:
+            update["auto_build_graph"] = req.auto_build_graph
 
         if req.ollama_base_url is not None:
             if not req.ollama_base_url.strip():

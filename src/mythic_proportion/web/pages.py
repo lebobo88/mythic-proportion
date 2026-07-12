@@ -17,6 +17,8 @@ from pathlib import Path
 
 from mythic_proportion.compile.graph import derive_title, extract_links
 from mythic_proportion.compile.writer import parse_page
+from mythic_proportion.ingest.dedup import Ledger
+from mythic_proportion.ingest.pipeline import LEDGER_RELATIVE_PATH, default_parser_registry
 from mythic_proportion.vault.layout import WIKI_SUBDIRS
 
 _DIR_TO_PAGE_TYPE: dict[str, str] = {
@@ -74,6 +76,98 @@ def collect_pages(vault_root: Path) -> list[PageInfo]:
                 )
             )
     return pages
+
+
+def collect_raw_sources(vault_root: Path) -> list[PageInfo]:
+    """Return a :class:`PageInfo` for every raw ingested source currently
+    recorded in the dedup ledger (``.vault-meta/ingested.json``), re-parsed
+    via the exact same parser registry :func:`~mythic_proportion.ingest.pipeline.ingest_drop`
+    used at ingest time.
+
+    This is GraphRAG extraction's source of truth (see
+    :func:`mythic_proportion.graph.index.reindex_graph`) -- deliberately
+    the *original*, uncompressed ingested documents in ``raw/``, not
+    :func:`collect_pages`'s ``wiki/`` output. ``wiki/`` pages are
+    LLM-compiled summaries capped at a few thousand characters
+    (:mod:`mythic_proportion.compile.pipeline`/:mod:`.prompt`) -- extracting
+    entities/relationships/claims from that lossy intermediate instead of
+    the real source material was the root cause of near-empty GraphRAG data
+    on real vaults with substantial source documents. This function is
+    entirely independent of, and does not affect, the separate
+    wikilink-derived page graph (:mod:`mythic_proportion.compile.graph`)
+    that already powers the Wiki view's in/out link counts.
+
+    Re-parses on every call rather than caching the parsed Markdown on disk
+    (:func:`~mythic_proportion.ingest.pipeline.ingest_drop` only persists it
+    transiently, in ``.vault-meta/staging/``, which is not guaranteed to
+    survive) -- acceptable at personal-vault scale, and the *chunk-level*
+    ``content_hash`` diff in ``graph.index`` still means an unchanged source
+    costs zero LLM calls even though it costs one reparse.
+
+    A raw file that's been moved/deleted since ingest, or whose kind has no
+    registered parser, or that fails to (re-)parse (e.g. a heavy optional
+    parsing dependency installed at ingest time but missing now) is skipped
+    rather than aborting the whole call -- mirrors :func:`~mythic_proportion.ingest.pipeline.ingest_drop`'s
+    own "a single bad file must never abort the run" contract.
+    """
+    # Resolved once, up front: `entry["raw_path"]` in the ledger is whatever
+    # absolute/relative form `ingest_drop` happened to be called with
+    # (usually absolute -- see `ingest.pipeline.ingest_drop`'s
+    # `raw_dir = vault_root / "raw"`), which need not match the form *this*
+    # call's `vault_root` argument was passed in (e.g. a relative
+    # `--vault playground` CLI argument against an absolute ledger entry).
+    # Resolving both sides before `relative_to` makes the comparison
+    # path-form-independent instead of raising `ValueError` on a mismatch.
+    vault_root = Path(vault_root).resolve()
+    ledger_path = vault_root / LEDGER_RELATIVE_PATH
+    if not ledger_path.is_file():
+        return []
+
+    ledger = Ledger(ledger_path)
+    registry = default_parser_registry()
+    sources: list[PageInfo] = []
+
+    for content_hash_value, entry in sorted(ledger.items()):
+        raw_path = Path(entry.get("raw_path", ""))
+        if not raw_path.is_absolute():
+            raw_path = vault_root / raw_path
+        raw_path = raw_path.resolve()
+        if not raw_path.is_file():
+            continue  # moved/deleted since ingest -- skip, don't error
+
+        kind = entry.get("kind", "document")
+        parser = registry.get(kind)
+        if parser is None:
+            continue
+
+        try:
+            body = parser(raw_path)
+        except Exception:
+            # A single source failing to (re-)parse must never abort a
+            # whole graph reindex -- e.g. a heavy optional dependency
+            # (Docling) installed at ingest time but missing now.
+            continue
+
+        original_name = str(entry.get("original_name") or raw_path.name)
+        try:
+            rel_path = raw_path.relative_to(vault_root).as_posix()
+        except ValueError:
+            # A raw file that somehow lives outside this vault's own raw/
+            # dir (e.g. a ledger copied/merged from a different vault) --
+            # skip rather than raise, same "never abort the whole reindex"
+            # contract as every other per-source failure above.
+            continue
+        sources.append(
+            PageInfo(
+                path=rel_path,
+                title=original_name,
+                page_type="source",
+                tags=[],
+                frontmatter={"content_hash": content_hash_value},
+                body=body,
+            )
+        )
+    return sources
 
 
 def title_to_path_index(pages: list[PageInfo]) -> dict[str, str]:

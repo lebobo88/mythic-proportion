@@ -93,4 +93,71 @@ describe("IngestView", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/ingest", expect.objectContaining({ method: "POST" })));
   });
+
+  // GraphRAG extraction pipeline bugfix (DEFECT 1 -- "extraction is never
+  // invoked by any real entry point"): the "Build Knowledge Graph" button.
+  it("hits POST /api/index-graph then GET /api/index-graph/status and renders the result", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ job_id: "graph-job-1" }) });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: "graph-job-1",
+        status: "done",
+        done: true,
+        created_at: 0,
+        updated_at: 1,
+        text_units_added: 3,
+        text_units_updated: 0,
+        text_units_deleted: 0,
+        entities_upserted: 5,
+        entities_deleted: 0,
+        relationships_upserted: 2,
+        claims_upserted: 1,
+        llm_calls: 4,
+        error: null,
+      }),
+    });
+
+    render(<IngestView onIngestComplete={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Build Knowledge Graph" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/index-graph", expect.objectContaining({ method: "POST" })),
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/api/index-graph/status?job_id=graph-job-1", expect.anything()),
+    );
+
+    await screen.findByText(/Knowledge graph build: done/);
+    expect(screen.getByText(/Entities: 5/)).toBeInTheDocument();
+    expect(screen.getByText(/Relationships: 2/)).toBeInTheDocument();
+  });
+
+  it("renders a graph-build job error without crashing", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ job_id: "graph-job-2" }) });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        id: "graph-job-2",
+        status: "done",
+        done: true,
+        created_at: 0,
+        updated_at: 1,
+        text_units_added: 0,
+        text_units_updated: 0,
+        text_units_deleted: 0,
+        entities_upserted: 0,
+        entities_deleted: 0,
+        relationships_upserted: 0,
+        claims_upserted: 0,
+        llm_calls: 0,
+        error: "AUTHHUB_API_KEY is not set",
+      }),
+    });
+
+    render(<IngestView onIngestComplete={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Build Knowledge Graph" }));
+
+    await screen.findByText(/AUTHHUB_API_KEY is not set/);
+  });
 });

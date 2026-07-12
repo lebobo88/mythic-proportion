@@ -13,7 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mythic_proportion.graph.cache import LlmCache, read_through_complete
-from mythic_proportion.graph.extract import ExtractionClient, _parse_with_one_repair
+from mythic_proportion.graph.extract import (
+    ExtractionClient,
+    _finish_turn,
+    _parse_with_one_repair,
+    _start_turn,
+)
 from mythic_proportion.graph.tuples import build_claims_prompt, normalize_claim_status, normalize_title
 
 _NONE_TOKENS = {"", "NONE", "N/A", "NULL"}
@@ -55,10 +60,18 @@ def extract_claims(
         return [], 0
 
     system, user = build_claims_prompt(text, entity_titles)
-    response, hit = read_through_complete(client, cache, system=system, user=user, model=model)
+
+    # Turn-scoped redaction (see `graph.extract._start_turn`/`_finish_turn`
+    # and `RedactingExtractionClient`'s docstring): the repair round-trip
+    # below reuses `_parse_with_one_repair`, which splices this call's raw
+    # completion into a new outbound prompt on a parse failure -- that
+    # spliced text must stay redacted the whole way through, and is only
+    # rehydrated once, per final claim field, after parsing.
+    call_client, turn_map = _start_turn(client)
+    response, hit = read_through_complete(call_client, cache, system=system, user=user, model=model)
     llm_calls = 0 if hit else 1
 
-    records, repair_calls = _parse_with_one_repair(response, client=client, cache=cache, model=model)
+    records, repair_calls = _parse_with_one_repair(response, client=call_client, cache=cache, model=model)
     llm_calls += repair_calls
 
     claims: list[ExtractedClaim] = []
@@ -67,19 +80,19 @@ def extract_claims(
         if kind != "claim" or len(fields) < 2:
             continue
 
-        subject = normalize_title(fields[1])
+        subject = normalize_title(_finish_turn(client, fields[1], turn_map))
         if not subject:
             continue
 
-        obj_raw = fields[2] if len(fields) > 2 else None
+        obj_raw = _finish_turn(client, fields[2], turn_map) if len(fields) > 2 else None
         obj_clean = _none_if_blank(obj_raw)
         claim_object = normalize_title(obj_clean) if obj_clean else None
 
         claim_type = fields[3].strip().upper() if len(fields) > 3 and fields[3].strip() else "OTHER"
         status = normalize_claim_status(fields[4]) if len(fields) > 4 else "SUSPECTED"
-        period_start = _none_if_blank(fields[5]) if len(fields) > 5 else None
-        period_end = _none_if_blank(fields[6]) if len(fields) > 6 else None
-        description = fields[7] if len(fields) > 7 else ""
+        period_start = _none_if_blank(_finish_turn(client, fields[5], turn_map)) if len(fields) > 5 else None
+        period_end = _none_if_blank(_finish_turn(client, fields[6], turn_map)) if len(fields) > 6 else None
+        description = _finish_turn(client, fields[7], turn_map) if len(fields) > 7 else ""
 
         claims.append(
             ExtractedClaim(

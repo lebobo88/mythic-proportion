@@ -154,6 +154,9 @@ export interface ConfigResponse {
   ollama_base_url?: string;
   ollama_model?: string;
   embeddings_backend?: string;
+  // GraphRAG extraction pipeline bugfix (DEFECT 1) addition -- strictly
+  // additive/optional, same shape as the Phase 6 fields above.
+  auto_build_graph?: boolean;
 }
 
 export interface ConfigUpdateRequest {
@@ -165,6 +168,25 @@ export interface ConfigUpdateRequest {
   redaction_enabled?: boolean;
   ollama_base_url?: string;
   ollama_model?: string;
+  // GraphRAG extraction pipeline bugfix (DEFECT 1) addition.
+  auto_build_graph?: boolean;
+}
+
+export interface GraphJobStatus {
+  id: string | null;
+  status: "queued" | "running" | "done" | "idle";
+  done: boolean;
+  created_at: number | null;
+  updated_at: number | null;
+  text_units_added: number;
+  text_units_updated: number;
+  text_units_deleted: number;
+  entities_upserted: number;
+  entities_deleted: number;
+  relationships_upserted: number;
+  claims_upserted: number;
+  llm_calls: number;
+  error: string | null;
 }
 
 export interface ModelsResponse {
@@ -263,6 +285,27 @@ export async function enqueueIngest(): Promise<{ job_id: string }> {
 export async function fetchIngestStatus(jobId: string): Promise<IngestJobStatus> {
   const res = await fetchJsonWithTimeout(
     `/api/ingest/status?job_id=${encodeURIComponent(jobId)}`,
+    {},
+    10000,
+  );
+  if (!res.ok) throw new Error(`unexpected status ${res.status}`);
+  return res.json();
+}
+
+// GraphRAG extraction pipeline bugfix (DEFECT 1 -- "extraction is never
+// invoked by any real entry point"): the web UI's "Build Knowledge Graph"
+// action, following the exact same async-job/progress pattern as
+// enqueueIngest/fetchIngestStatus above.
+export async function enqueueIndexGraph(): Promise<{ job_id: string }> {
+  const res = await fetch("/api/index-graph", { method: "POST" });
+  const data = await res.json();
+  if (!res.ok || !data.job_id) throw new Error(data.detail || "no job id returned");
+  return data;
+}
+
+export async function fetchIndexGraphStatus(jobId: string): Promise<GraphJobStatus> {
+  const res = await fetchJsonWithTimeout(
+    `/api/index-graph/status?job_id=${encodeURIComponent(jobId)}`,
     {},
     10000,
   );

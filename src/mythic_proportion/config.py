@@ -81,6 +81,17 @@ class Settings(BaseSettings):
     #: isn't installed -- see
     #: :func:`mythic_proportion.privacy.redact.get_redactor`.
     redaction_enabled: bool = True
+    #: Bugfix (Phase 3/4 GraphRAG extraction pipeline wiring gap): whether
+    #: the web UI's ingest job should automatically enqueue a
+    #: `mythic index-graph`-equivalent pass (GraphRAG entity/relationship/
+    #: claim extraction, see :func:`mythic_proportion.graph.index.reindex_graph`)
+    #: immediately after its ordinary `IndexStore.reindex` pass. Defaults to
+    #: ``False`` -- extraction makes real LLM calls (real cost) per the
+    #: ``index-graph`` CLI command's own docstring, so this stays an
+    #: explicit opt-in rather than a surprise cost on every ingest. Toggled
+    #: via the Settings view / `POST /api/config`; `mythic index-graph`
+    #: itself remains available on demand regardless of this setting.
+    auto_build_graph: bool = False
     #: Base URL of the AuthHub gateway. Overridable at the process level via
     #: the (non-``MYTHIC_``-prefixed) ``AUTHHUB_BASE_URL`` env var -- see
     #: :func:`authhub_base_url`.

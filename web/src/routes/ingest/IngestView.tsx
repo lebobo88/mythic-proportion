@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui";
 import {
+  enqueueIndexGraph,
   enqueueIngest,
+  fetchIndexGraphStatus,
   fetchIngestStatus,
   uploadFiles,
+  type GraphJobStatus,
   type IngestJobStatus,
 } from "../../lib/api";
 import "./ingest.css";
@@ -20,6 +23,15 @@ export function IngestView({ onIngestComplete }: { onIngestComplete: () => void 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pollHandleRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollJobIdRef = useRef<string | null>(null);
+
+  // GraphRAG "Build Knowledge Graph" action (bugfix DEFECT 1) -- its own
+  // independent job/polling state, separate from the ingest job above, so
+  // triggering one never clobbers the other's displayed progress.
+  const [graphJob, setGraphJob] = useState<GraphJobStatus | null>(null);
+  const [graphBuilding, setGraphBuilding] = useState(false);
+  const [graphError, setGraphError] = useState<string | null>(null);
+  const graphPollHandleRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const graphPollJobIdRef = useRef<string | null>(null);
 
   const stopPolling = useCallback(() => {
     if (pollHandleRef.current !== null) {
@@ -58,6 +70,54 @@ export function IngestView({ onIngestComplete }: { onIngestComplete: () => void 
   );
 
   useEffect(() => stopPolling, [stopPolling]);
+
+  const stopGraphPolling = useCallback(() => {
+    if (graphPollHandleRef.current !== null) {
+      clearInterval(graphPollHandleRef.current);
+      graphPollHandleRef.current = null;
+    }
+    graphPollJobIdRef.current = null;
+  }, []);
+
+  const pollGraphOnce = useCallback(async (jobId: string) => {
+    try {
+      const status = await fetchIndexGraphStatus(jobId);
+      if (jobId !== graphPollJobIdRef.current) return;
+      setGraphJob(status);
+      if (status.done) {
+        stopGraphPolling();
+        setGraphBuilding(false);
+      }
+    } catch {
+      // Transient poll failure: keep whatever was last rendered, try again
+      // on the next tick (matches the ingest-job polling behavior above).
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopGraphPolling]);
+
+  const startGraphPolling = useCallback(
+    (jobId: string) => {
+      stopGraphPolling();
+      graphPollJobIdRef.current = jobId;
+      pollGraphOnce(jobId);
+      graphPollHandleRef.current = setInterval(() => pollGraphOnce(jobId), 1000);
+    },
+    [pollGraphOnce, stopGraphPolling],
+  );
+
+  useEffect(() => stopGraphPolling, [stopGraphPolling]);
+
+  async function handleBuildGraph() {
+    setGraphError(null);
+    setGraphBuilding(true);
+    try {
+      const result = await enqueueIndexGraph();
+      startGraphPolling(result.job_id);
+    } catch (err) {
+      setGraphError(`Build Knowledge Graph failed: ${String(err)}`);
+      setGraphBuilding(false);
+    }
+  }
 
   async function handleFiles(files: FileList | File[]) {
     setUploading(true);
@@ -128,6 +188,33 @@ export function IngestView({ onIngestComplete }: { onIngestComplete: () => void 
       <Button type="button" variant="secondary" onClick={handleIngestOnly}>
         Ingest drop/ folder
       </Button>
+      <Button type="button" variant="secondary" onClick={handleBuildGraph} disabled={graphBuilding}>
+        {graphBuilding ? "Building Knowledge Graph..." : "Build Knowledge Graph"}
+      </Button>
+      <div className="mp-ingest-result">
+        {graphError ? <div className="mp-ingest-panel mp-ingest-panel--error">{graphError}</div> : null}
+        {graphJob ? (
+          <div className="mp-ingest-panel">
+            <div className="mp-ingest-status-line">
+              {graphJob.status === "done" ? "Knowledge graph build: done" : "Building knowledge graph..."}
+            </div>
+            {graphJob.status === "done" && graphJob.error ? (
+              <div className="mp-ingest-panel mp-ingest-panel--error">{graphJob.error}</div>
+            ) : null}
+            {graphJob.status === "done" && !graphJob.error ? (
+              <div className="mp-ingest-panel">
+                Entities: {graphJob.entities_upserted}
+                <br />
+                Relationships: {graphJob.relationships_upserted}
+                <br />
+                Claims: {graphJob.claims_upserted}
+                <br />
+                LLM calls: {graphJob.llm_calls}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
       <div className="mp-ingest-result">
         {uploading ? <div className="mp-ingest-panel">Uploading...</div> : null}
         {error ? <div className="mp-ingest-panel mp-ingest-panel--error">{error}</div> : null}

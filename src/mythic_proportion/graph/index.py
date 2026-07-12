@@ -1,23 +1,36 @@
 """Incremental GraphRAG re-index orchestration (Phase 3).
 
 :func:`reindex_graph` is the single entry point that ties the rest of the
-``graph`` package together: chunk every page (:mod:`.chunk`), diff each
-page's text-unit ``content_hash`` set against what's already stored
+``graph`` package together: chunk every RAW ingested source
+(:func:`mythic_proportion.web.pages.collect_raw_sources`; see below), diff
+each source's text-unit ``content_hash`` set against what's already stored
 (:class:`mythic_proportion.graph.store.GraphStore`), and for only the
 new/changed units, run entity+relationship extraction (:mod:`.extract`) then
 claim extraction (:mod:`.claims`) -- both cached read-through
 (:mod:`.cache`), so an unchanged vault costs zero LLM calls on re-run.
 
-Expects to be called **after** :meth:`mythic_proportion.index.store.IndexStore.reindex`
-has already synced the ``pages`` table for this vault (``text_units.page_path``
-references it) -- see the ``mythic index-graph`` CLI command for the intended
-call order.
+**Source of truth (bugfix, Phase 3/4 GraphRAG extraction pipeline
+investigation):** this defaults to :func:`~mythic_proportion.web.pages.collect_raw_sources`
+(the original ``raw/`` ingested documents), NOT
+:func:`~mythic_proportion.web.pages.collect_pages` (``wiki/``'s LLM-compiled,
+char-capped summary pages) -- extracting from the compiled summaries
+starved extraction of real source material on real vaults with substantial
+source documents. A caller may still pass any pre-built ``PageInfo`` list
+explicitly via ``pages=`` (tests do this to avoid re-walking disk).
+
+Independently of this, :meth:`mythic_proportion.index.store.IndexStore.reindex`
+still keeps the hybrid-search sidecar (``pages``/``pages_fts``/embeddings,
+which back ``/api/search`` and the wikilink page graph) in sync with
+``wiki/`` -- that is a separate, unaffected concern from GraphRAG's
+raw-sourced extraction; see the ``mythic index-graph`` CLI command for the
+intended call order (still: ``IndexStore.reindex`` then ``reindex_graph``).
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from mythic_proportion.graph.cache import LlmCache
 from mythic_proportion.graph.chunk import chunk_text
@@ -25,7 +38,74 @@ from mythic_proportion.graph.claims import extract_claims
 from mythic_proportion.graph.extract import ExtractionClient, extract_entities_relationships
 from mythic_proportion.graph.store import GraphReindexReport, GraphStore, ensure_graph_vec_tables
 from mythic_proportion.index.embeddings import Embedder, l2_normalize
-from mythic_proportion.web.pages import PageInfo, collect_pages
+from mythic_proportion.web.pages import PageInfo, collect_raw_sources
+
+
+class GraphExtractionSetupError(Exception):
+    """Raised by :func:`build_extraction_client` when the configured LLM
+    provider can't be constructed for GraphRAG extraction (missing
+    credential, redaction enabled-but-unavailable, or an invalid local/
+    Ollama configuration). Callers translate this into their own
+    presentation -- the CLI's ``index-graph`` command prints it in red and
+    exits 1; the web UI's background job worker records it as a job error.
+    """
+
+
+def build_extraction_client(settings: Any) -> ExtractionClient:
+    """Build the (optionally redaction-wrapped) :class:`ExtractionClient`
+    ``mythic index-graph`` and the web UI's "Build Knowledge Graph" job both
+    route through -- a single shared implementation so the CLI and the web
+    worker can never drift on provider selection, credential checks, or the
+    redaction wrap (see ``memory/invariants.md``'s Phase 6 redact-before-any-
+    cloud-call invariant).
+
+    Phase 6: ``settings.local`` (or explicit ``llm_provider="ollama"``)
+    routes entirely through Ollama, never AuthHub -- same per-vault
+    "never touch the cloud" guarantee as ``compile``/``query`` (see
+    :func:`mythic_proportion.query.engine._default_extraction_client`).
+    """
+    from mythic_proportion.config import authhub_api_key, authhub_base_url
+
+    if settings.local or settings.llm_provider == "ollama":
+        from mythic_proportion.llm.ollama import OllamaConfigError, OllamaExtractionClient, require_loopback_url
+
+        if settings.local:
+            try:
+                require_loopback_url(settings.ollama_base_url, context="local mode (settings.local=True)")
+            except OllamaConfigError as exc:
+                raise GraphExtractionSetupError(str(exc)) from exc
+
+        client: ExtractionClient = OllamaExtractionClient(
+            base_url=settings.ollama_base_url, model=settings.ollama_model
+        )
+    else:
+        api_key = authhub_api_key()
+        if not api_key:
+            raise GraphExtractionSetupError(
+                "index-graph requires AUTHHUB_API_KEY to be set (or MYTHIC_LLM_PROVIDER=anthropic "
+                "support, not yet wired for extraction; or MYTHIC_LOCAL=true / MYTHIC_LLM_PROVIDER=ollama "
+                "for a fully-local run)."
+            )
+
+        from mythic_proportion.graph.extract import AuthHubExtractionClient
+
+        client = AuthHubExtractionClient(
+            base_url=authhub_base_url(settings),
+            api_key=api_key,
+            model=settings.llm_model,
+            route_alias=settings.route_alias,
+        )
+
+    from mythic_proportion.privacy.redact import RedactingExtractionClient, RedactionUnavailableError, get_redactor
+
+    try:
+        redactor = get_redactor(settings)
+    except RedactionUnavailableError as exc:
+        raise GraphExtractionSetupError(f"Redaction is enabled but unavailable: {exc}") from exc
+    if redactor is not None:
+        client = RedactingExtractionClient(client, redactor)  # type: ignore[assignment]
+
+    return client
 
 
 def reindex_graph(
@@ -48,7 +128,8 @@ def reindex_graph(
     ``text_unit_entities`` so an entity still cited elsewhere survives.
 
     ``pages`` lets callers (tests, or a caller that already ran
-    ``collect_pages``) pass a pre-built page list instead of re-walking disk.
+    ``collect_raw_sources``/``collect_pages``) pass a pre-built page list
+    instead of re-walking disk.
     """
     vault_root = Path(vault_root)
     store = GraphStore(conn)
@@ -58,7 +139,7 @@ def reindex_graph(
     if embedder is not None and vec_active:
         ensure_graph_vec_tables(conn, vec_active=vec_active, dim=embedder.dim)
 
-    resolved_pages = pages if pages is not None else collect_pages(vault_root)
+    resolved_pages = pages if pages is not None else collect_raw_sources(vault_root)
     seen_paths = {page.path for page in resolved_pages}
 
     for page in resolved_pages:

@@ -231,6 +231,111 @@ def test_ledger_race_fixed_batch_of_sources_all_recorded(worker, monkeypatch) ->
         )
 
 
+def test_enqueue_graph_job_reports_setup_error_without_crashing_worker(worker) -> None:
+    """Bugfix DEFECT 1 (wiring gap): `enqueue_graph` -- the web UI's "Build
+    Knowledge Graph" action -- must never crash the worker thread, and a
+    setup failure (no AUTHHUB_API_KEY, redaction disabled here to isolate
+    just the credential check) is reported as `GraphJob.error`."""
+    w, vault = worker
+    job_id = w.enqueue_graph()
+    assert w.wait_idle(timeout=5.0)
+
+    job = w.get_graph_job(job_id)
+    assert job is not None
+    assert job["id"] == job_id
+    assert job["status"] == "done"
+    assert job["done"] is True
+    assert job["error"] is not None
+    assert "AUTHHUB_API_KEY" in job["error"]
+
+
+def test_get_graph_job_with_no_id_returns_most_recent(worker) -> None:
+    w, _vault = worker
+    job_id_1 = w.enqueue_graph()
+    assert w.wait_idle(timeout=5.0)
+    job_id_2 = w.enqueue_graph()
+    assert w.wait_idle(timeout=5.0)
+
+    latest = w.get_graph_job()
+    assert latest is not None
+    assert latest["id"] == job_id_2
+    assert job_id_1 != job_id_2
+
+
+def test_get_graph_job_unknown_id_returns_none(worker) -> None:
+    w, _vault = worker
+    assert w.get_graph_job("does-not-exist") is None
+
+
+def test_auto_build_graph_toggle_runs_graph_reindex_after_ingest(tmp_path: Path, monkeypatch) -> None:
+    """The opt-in "auto-build knowledge graph after ingest" Settings toggle:
+    when `settings.auto_build_graph` is True, `_run_job` calls
+    `_do_reindex_graph` after its ordinary `IndexStore.reindex` pass."""
+    from mythic_proportion.compile.models import CompileResult, WikiPage
+    from mythic_proportion.compile.writer import write_page
+    from mythic_proportion.config import Settings
+    from mythic_proportion.web import jobs as web_jobs_module
+
+    vault = _seed_vault(tmp_path)
+    calls: list[Settings] = []
+
+    def _fake_compile_source(vault_root, source, *, settings=None, client=None, now=None):  # noqa: ANN001
+        page = WikiPage.new(page_type="source", title=f"Compiled {source.original_name}", body="stand-in body")
+        write_page(vault_root, page)
+        return CompileResult(pages=[page], contradictions=[], links_created=[])
+
+    monkeypatch.setattr(web_jobs_module, "compile_source", _fake_compile_source)
+
+    def _fake_do_reindex_graph(self, settings):  # noqa: ANN001
+        calls.append(settings)
+
+        class _Report:
+            pass
+
+        return _Report()
+
+    monkeypatch.setattr(web_jobs_module.IngestWorker, "_do_reindex_graph", _fake_do_reindex_graph)
+
+    settings = Settings(vault_path=vault, redaction_enabled=False, auto_build_graph=True)
+    w = IngestWorker(vault, get_settings=lambda: settings)
+    w.start()
+    try:
+        _drop_file(vault, "note.md")
+        job_id = w.enqueue()
+        assert w.wait_idle(timeout=5.0)
+        job = w.get_job(job_id)
+        assert job["status"] == "done"
+        assert job["errors"] == []
+        assert len(calls) == 1
+    finally:
+        w.stop(timeout=5.0)
+
+
+def test_auto_build_graph_off_by_default_never_calls_reindex_graph(tmp_path: Path, monkeypatch) -> None:
+    from mythic_proportion.config import Settings
+    from mythic_proportion.web import jobs as web_jobs_module
+
+    vault = _seed_vault(tmp_path)
+    calls: list[Settings] = []
+
+    def _fake_do_reindex_graph(self, settings):  # noqa: ANN001
+        calls.append(settings)
+
+    monkeypatch.setattr(web_jobs_module.IngestWorker, "_do_reindex_graph", _fake_do_reindex_graph)
+
+    settings = Settings(vault_path=vault, redaction_enabled=False)  # auto_build_graph defaults False
+    w = IngestWorker(vault, get_settings=lambda: settings)
+    w.start()
+    try:
+        _drop_file(vault, "note.md")
+        job_id = w.enqueue()
+        assert w.wait_idle(timeout=5.0)
+        assert w.get_job(job_id)["status"] == "done"
+        assert calls == []
+    finally:
+        w.stop(timeout=5.0)
+
+
 def test_worker_stop_is_idempotent_and_bounded(tmp_path: Path) -> None:
     vault = _seed_vault(tmp_path)
     w = IngestWorker(vault, get_settings=lambda: _settings(vault))

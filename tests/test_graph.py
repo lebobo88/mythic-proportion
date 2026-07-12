@@ -39,7 +39,9 @@ from mythic_proportion.graph.tuples import (
 )
 from mythic_proportion.index.embeddings import HashEmbedder
 from mythic_proportion.index.store import IndexStore
+from mythic_proportion.ingest.pipeline import ingest_drop
 from mythic_proportion.vault.init import init_vault
+from mythic_proportion.web.pages import PageInfo
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "src" / "mythic_proportion" / "index" / "schema.sql"
 
@@ -162,6 +164,63 @@ def test_parse_tuple_records_handles_record_delimiter_inside_parens() -> None:
     records = parse_tuple_records(raw)
     assert len(records) == 1
     assert records[0][3] == "before ## after"
+
+
+def test_parse_tuple_records_survives_bare_newline_joined_records() -> None:
+    """Regression test for the real-model failure mode: a completion that
+    joins multiple records with a bare "\\n" instead of RECORD_DELIM (##)
+    -- the exact ambiguity `build_extract_graph_prompt`'s prior worked
+    example accidentally taught the model. Before the parser
+    defense-in-depth fix, this corrupted ~89% of extracted entities: the
+    unsplit blob's outermost-paren-stripping absorbed each subsequent
+    record's opening syntax into the previous record's description."""
+    raw = (
+        _entity_record("Ada Lovelace", "PERSON", "a mathematician who worked on the Analytical Engine")
+        + "\n"
+        + _entity_record("Charles Babbage", "PERSON", "an inventor who designed the Analytical Engine")
+        + "\n"
+        + _relationship_record("Ada Lovelace", "Charles Babbage", "collaborated for years", "9")
+        + COMPLETION_DELIM
+    )
+    records = parse_tuple_records(raw)
+    assert records == [
+        ["entity", "Ada Lovelace", "PERSON", "a mathematician who worked on the Analytical Engine"],
+        ["entity", "Charles Babbage", "PERSON", "an inventor who designed the Analytical Engine"],
+        ["relationship", "Ada Lovelace", "Charles Babbage", "collaborated for years", "9"],
+    ]
+    for record in records:
+        description = record[3] if len(record) > 3 else ""
+        assert ')\n("entity' not in description
+        assert ')\n("relationship' not in description
+
+
+def test_parse_tuple_records_bare_newline_mixed_kinds_no_corruption() -> None:
+    """Same bare-newline defect, but exercising a relationship->entity
+    transition (not just two consecutive entities) to make sure the
+    balanced-paren-group fallback isn't accidentally scoped to only one
+    record-kind transition."""
+    raw = (
+        _relationship_record("A", "B", "first relationship description", "5")
+        + "\n"
+        + _entity_record("C", "CONCEPT", "an entity description that follows a relationship")
+        + COMPLETION_DELIM
+    )
+    records = parse_tuple_records(raw)
+    assert records == [
+        ["relationship", "A", "B", "first relationship description", "5"],
+        ["entity", "C", "CONCEPT", "an entity description that follows a relationship"],
+    ]
+    assert ')\n("entity' not in records[0][3]
+
+
+def test_parse_tuple_records_single_record_unaffected_by_fallback() -> None:
+    """A genuinely single-record completion (no second record at all,
+    correctly delimited or not) must not be altered by the bare-newline
+    fallback -- the fallback only engages when more than one top-level
+    balanced paren group is present."""
+    raw = _entity_record("Solo Entity", "CONCEPT", "the only record") + COMPLETION_DELIM
+    records = parse_tuple_records(raw)
+    assert records == [["entity", "Solo Entity", "CONCEPT", "the only record"]]
 
 
 def test_normalize_title_dedups_case_and_whitespace_variants() -> None:
@@ -470,21 +529,35 @@ def test_ensure_graph_vec_tables_noop_when_vec_inactive() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_two_page_vault(tmp_path: Path) -> Path:
+def _seed_two_page_vault(tmp_path: Path) -> tuple[Path, list[PageInfo]]:
+    """Seed an empty vault and return ``(vault, pages)`` -- ``pages`` is
+    passed explicitly to every `reindex_graph(..., pages=pages)` call below
+    so these tests exercise chunk/extract/store logic independent of
+    `reindex_graph`'s *default* source (`collect_raw_sources`, reading
+    `raw/` -- see `test_reindex_graph_default_source_reads_raw_not_compiled_wiki`
+    below for a test of that default itself). `init_vault` is still called
+    so `IndexStore`'s on-disk vault structure exists."""
     vault = tmp_path / "vault"
     init_vault(vault)
-    write_page(
-        vault,
-        WikiPage.new(
-            page_type="concept",
+    pages = [
+        PageInfo(
+            path="raw/ada-lovelace.md",
             title="Ada Lovelace",
+            page_type="source",
+            tags=[],
+            frontmatter={},
             body="Ada Lovelace worked with Charles Babbage on the Analytical Engine.",
         ),
-    )
-    write_page(
-        vault, WikiPage.new(page_type="concept", title="Gardening", body="Water tomatoes daily in summer.")
-    )
-    return vault
+        PageInfo(
+            path="raw/gardening.md",
+            title="Gardening",
+            page_type="source",
+            tags=[],
+            frontmatter={},
+            body="Water tomatoes daily in summer.",
+        ),
+    ]
+    return vault, pages
 
 
 def _fixture_for_two_page_vault(system: str, user: str, idx: int) -> str:
@@ -505,14 +578,14 @@ def _fixture_for_two_page_vault(system: str, user: str, idx: int) -> str:
 
 
 def test_reindex_graph_full_pipeline_populates_entities_relationships_claims(tmp_path: Path) -> None:
-    vault = _seed_two_page_vault(tmp_path)
+    vault, pages = _seed_two_page_vault(tmp_path)
     client = FakeExtractionClient(_fixture_for_two_page_vault)
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         report = reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
 
         assert report.entities_upserted == 2
@@ -524,14 +597,14 @@ def test_reindex_graph_full_pipeline_populates_entities_relationships_claims(tmp
 
 
 def test_reindex_graph_is_idempotent_zero_new_calls_on_unchanged_reindex(tmp_path: Path) -> None:
-    vault = _seed_two_page_vault(tmp_path)
+    vault, pages = _seed_two_page_vault(tmp_path)
     client = FakeExtractionClient(_fixture_for_two_page_vault)
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         first_report = reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
         entity_ids_before = {
             row["title"]: row["id"] for row in store.conn.execute("SELECT id, title FROM entities")
@@ -541,7 +614,7 @@ def test_reindex_graph_is_idempotent_zero_new_calls_on_unchanged_reindex(tmp_pat
 
         second_report = reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
         entity_ids_after = {
             row["title"]: row["id"] for row in store.conn.execute("SELECT id, title FROM entities")
@@ -553,27 +626,36 @@ def test_reindex_graph_is_idempotent_zero_new_calls_on_unchanged_reindex(tmp_pat
 
 
 def test_reindex_graph_incremental_only_changed_page_reextracts(tmp_path: Path) -> None:
-    vault = _seed_two_page_vault(tmp_path)
+    vault, pages = _seed_two_page_vault(tmp_path)
     client = FakeExtractionClient(_fixture_for_two_page_vault)
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
         calls_after_first = len(client.calls)
 
-    # Change only the Gardening page -- Ada Lovelace's text unit hash is untouched.
-    gardening_path = vault / "wiki" / "concepts" / "gardening.md"
-    text = gardening_path.read_text(encoding="utf-8")
-    gardening_path.write_text(text.rstrip("\n") + "\n\nAlso rotate the crops.\n", encoding="utf-8")
+    # Change only the Gardening source's body -- Ada Lovelace's text unit
+    # hash is untouched.
+    updated_pages = [
+        pages[0],
+        PageInfo(
+            path=pages[1].path,
+            title=pages[1].title,
+            page_type=pages[1].page_type,
+            tags=pages[1].tags,
+            frontmatter=pages[1].frontmatter,
+            body=pages[1].body + "\n\nAlso rotate the crops.\n",
+        ),
+    ]
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         report = reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=updated_pages,
         )
         # The Gardening fixture returns COMPLETION_DELIM (no entities) for
         # every call, so re-extracting it costs exactly one LLM call and
@@ -589,23 +671,25 @@ def test_reindex_graph_incremental_only_changed_page_reextracts(tmp_path: Path) 
 
 
 def test_reindex_graph_deleting_a_page_removes_its_orphan_entities(tmp_path: Path) -> None:
-    vault = _seed_two_page_vault(tmp_path)
+    vault, pages = _seed_two_page_vault(tmp_path)
     client = FakeExtractionClient(_fixture_for_two_page_vault)
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
 
-    (vault / "wiki" / "concepts" / "ada-lovelace.md").unlink()
+    # Simulate the Ada Lovelace source disappearing (e.g. its raw file was
+    # moved/deleted) -- it's simply absent from the next `pages` list.
+    remaining_pages = [p for p in pages if p.title != "Ada Lovelace"]
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
         store.reindex(vault)
         report = reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=remaining_pages,
         )
         assert report.entities_deleted == 2
         entities = list(store.conn.execute("SELECT * FROM entities"))
@@ -615,16 +699,53 @@ def test_reindex_graph_deleting_a_page_removes_its_orphan_entities(tmp_path: Pat
 
 
 def test_reindex_graph_embeds_text_units_when_vec_active(tmp_path: Path) -> None:
-    vault = _seed_two_page_vault(tmp_path)
+    vault, pages = _seed_two_page_vault(tmp_path)
     client = FakeExtractionClient(_fixture_for_two_page_vault)
 
     with IndexStore(vault, HashEmbedder(dim=16), use_vec=None) as store:
         store.reindex(vault)
         reindex_graph(
             vault, store.conn, extraction_client=client, embedder=store.embedder,
-            vec_active=store.vec_active, model="mock", max_gleanings=0,
+            vec_active=store.vec_active, model="mock", max_gleanings=0, pages=pages,
         )
         if not store.vec_active:
             pytest.skip("sqlite-vec extension unavailable on this host")
         count = store.conn.execute("SELECT COUNT(*) AS n FROM text_unit_vectors").fetchone()["n"]
         assert count >= 1
+
+
+def test_reindex_graph_default_source_reads_raw_not_compiled_wiki(tmp_path: Path) -> None:
+    """Regression test for the wiring/source-of-truth bugfix: with no
+    explicit `pages=` override, `reindex_graph` must default to
+    `collect_raw_sources` (real ingested `raw/` documents), never
+    `collect_pages` (the compiled, char-capped `wiki/` summary). A short,
+    unrelated `wiki/` page is seeded alongside the real raw source -- if
+    `reindex_graph` still defaulted to `collect_pages`, that unrelated page
+    would be the ONLY text it ever saw, and no Ada Lovelace/Charles Babbage
+    entities would be extracted at all."""
+    vault = tmp_path / "vault"
+    init_vault(vault)
+
+    drop_dir = vault / "drop"
+    drop_dir.mkdir(parents=True, exist_ok=True)
+    (drop_dir / "note.md").write_text(
+        "Ada Lovelace worked with Charles Babbage on the Analytical Engine.", encoding="utf-8"
+    )
+    ingest_report = ingest_drop(vault)
+    assert not ingest_report.errors
+
+    write_page(
+        vault,
+        WikiPage.new(page_type="concept", title="Unrelated", body="Totally different, unrelated content."),
+    )
+
+    client = FakeExtractionClient(_fixture_for_two_page_vault)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        report = reindex_graph(
+            vault, store.conn, extraction_client=client, embedder=store.embedder,
+            vec_active=store.vec_active, model="mock", max_gleanings=0,
+        )
+        entities = {row["title"] for row in store.conn.execute("SELECT title FROM entities")}
+        assert entities == {"ADA LOVELACE", "CHARLES BABBAGE"}
+        assert report.entities_upserted == 2

@@ -27,7 +27,7 @@ module -- and the rest of the five-verb CLI -- stays importable without them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -35,7 +35,7 @@ from rich.markup import escape
 
 from mythic_proportion.compile.models import CompileError
 from mythic_proportion.compile.pipeline import compile_source
-from mythic_proportion.config import authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.config import load_settings
 from mythic_proportion.harness_ingest import DEFAULT_FABLE_ARTIFACT_LIMIT, ingest_harness
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.store import IndexStore
@@ -157,7 +157,7 @@ def reindex(
     )
 
 
-@app.command("index-graph", hidden=True)
+@app.command("index-graph")
 def index_graph(
     vault_path: Optional[Path] = typer.Option(
         None, "--vault", help="Vault whose GraphRAG data layer to sync (defaults to the current directory)."
@@ -166,71 +166,38 @@ def index_graph(
         1, "--max-gleanings", help="Max bounded 'did you miss any?' recall-loop rounds per text unit."
     ),
 ) -> None:
-    """Sync the GraphRAG entity/relationship/claim layer (Phase 3).
+    """Build/sync the GraphRAG entity/relationship/claim knowledge graph (Phase 3).
 
-    Chunks every page into text units, extracts entities/relationships/claims
-    via the configured LLM provider (AuthHub by default; requires
-    AUTHHUB_API_KEY) using prompted delimited-tuple output, and persists them
-    alongside the existing SQLite hybrid-search sidecar. Incremental: only
-    text units whose content changed since the last run are re-extracted
-    (cached via `llm_cache`, so an unchanged vault costs zero LLM calls).
-    Imports the extraction client lazily so the rest of the CLI never
-    requires it; not one of the six headline verbs -- hidden from --help.
+    Chunks every RAW ingested source document (`raw/`, NOT the compiled
+    `wiki/` summary pages) into text units, extracts entities/relationships/
+    claims via the configured LLM provider (AuthHub by default; requires
+    AUTHHUB_API_KEY, or a fully-local Ollama run via `local: true`) using
+    prompted delimited-tuple output, and persists them alongside the
+    existing SQLite hybrid-search sidecar. Incremental: only text units
+    whose content changed since the last run are re-extracted (cached via
+    `llm_cache`, so an unchanged vault costs zero LLM calls).
+
+    A real LLM-cost operation (unlike `reindex`) -- this is why it stays a
+    separate, explicit command rather than folded into `ingest`; the web
+    UI's "Build Knowledge Graph" action and its optional
+    "auto-build after ingest" Settings toggle (off by default) call this
+    exact same `reindex_graph` machinery. Imports the extraction client
+    lazily so the rest of the CLI never requires it. Was previously hidden
+    from `--help` while orphaned (no UI entry point ever called it); now a
+    documented, supported, UI-discoverable operation.
     """
     root = Path(vault_path) if vault_path is not None else Path.cwd()
     settings = load_settings(root)
     embedder = get_embedder(settings)
 
     from mythic_proportion.graph.extract import ExtractionError
-    from mythic_proportion.graph.index import reindex_graph
-
-    # Phase 6: `local: true` (or explicit `llm_provider="ollama"`) routes
-    # graph extraction entirely through Ollama, never AuthHub -- same
-    # per-vault "never touch the cloud" guarantee as compile/query (see
-    # `query.engine._default_extraction_client`).
-    if settings.local or settings.llm_provider == "ollama":
-        from mythic_proportion.llm.ollama import OllamaConfigError, OllamaExtractionClient, require_loopback_url
-
-        if settings.local:
-            try:
-                require_loopback_url(settings.ollama_base_url, context="local mode (settings.local=True)")
-            except OllamaConfigError as exc:
-                console.print(f"[red]{exc}[/red]")
-                raise typer.Exit(code=1) from exc
-
-        client: Any = OllamaExtractionClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
-    else:
-        api_key = authhub_api_key()
-        if not api_key:
-            console.print(
-                "[red]index-graph requires AUTHHUB_API_KEY to be set (or MYTHIC_LLM_PROVIDER=anthropic "
-                "support, not yet wired for extraction; or MYTHIC_LOCAL=true / MYTHIC_LLM_PROVIDER=ollama "
-                "for a fully-local run).[/red]"
-            )
-            raise typer.Exit(code=1)
-
-        from mythic_proportion.graph.extract import AuthHubExtractionClient
-
-        client = AuthHubExtractionClient(
-            base_url=authhub_base_url(settings),
-            api_key=api_key,
-            model=settings.llm_model,
-            route_alias=settings.route_alias,
-        )
-
-    from mythic_proportion.privacy.redact import (
-        RedactingExtractionClient,
-        RedactionUnavailableError,
-        get_redactor,
-    )
+    from mythic_proportion.graph.index import GraphExtractionSetupError, build_extraction_client, reindex_graph
 
     try:
-        redactor = get_redactor(settings)
-    except RedactionUnavailableError as exc:
-        console.print(f"[red]Redaction is enabled but unavailable: {exc}[/red]")
+        client = build_extraction_client(settings)
+    except GraphExtractionSetupError as exc:
+        console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
-    if redactor is not None:
-        client = RedactingExtractionClient(client, redactor)
 
     with IndexStore(root, embedder) as store:
         store.reindex(root)

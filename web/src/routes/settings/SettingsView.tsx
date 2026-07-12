@@ -37,6 +37,12 @@ export function SettingsView() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("");
   const [toggleStatus, setToggleStatus] = useState<{ message: string; error: boolean } | null>(null);
 
+  // GraphRAG extraction pipeline bugfix (DEFECT 1): off by default (real
+  // LLM-cost concern -- see `mythic index-graph`'s own docstring), saves
+  // via its own independent POST /api/config, same pattern as the other
+  // toggles above.
+  const [autoBuildGraph, setAutoBuildGraph] = useState(false);
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -52,6 +58,7 @@ export function SettingsView() {
       setRedactionEnabled(currentConfig.redaction_enabled ?? true);
       setOllamaModel(currentConfig.ollama_model ?? "");
       setOllamaBaseUrl(currentConfig.ollama_base_url ?? "");
+      setAutoBuildGraph(currentConfig.auto_build_graph ?? false);
     } catch (err) {
       setLoadError(`Failed to load current config: ${String(err)}`);
       return;
@@ -135,6 +142,25 @@ export function SettingsView() {
       });
     } catch (err) {
       setRedactionEnabled(!next);
+      setToggleStatus({ message: `Save failed: ${String(err)}`, error: true });
+    }
+  }
+
+  async function handleAutoBuildGraphToggle(event: React.ChangeEvent<HTMLInputElement>) {
+    const next = event.target.checked;
+    setAutoBuildGraph(next);
+    setToggleStatus({ message: "Saving...", error: false });
+    try {
+      const updated = await updateConfig({ auto_build_graph: next });
+      setConfig(updated);
+      setToggleStatus({
+        message: next
+          ? "Auto-build knowledge graph ON -- every ingest now also runs GraphRAG extraction (real LLM cost)."
+          : "Auto-build knowledge graph OFF.",
+        error: false,
+      });
+    } catch (err) {
+      setAutoBuildGraph(!next);
       setToggleStatus({ message: `Save failed: ${String(err)}`, error: true });
     }
   }
@@ -241,6 +267,18 @@ export function SettingsView() {
           unredacted.
         </p>
       ) : null}
+
+      <div className="mp-settings-field mp-settings-checkbox">
+        <label htmlFor="settings-auto-build-graph">
+          <input
+            id="settings-auto-build-graph"
+            type="checkbox"
+            checked={autoBuildGraph}
+            onChange={handleAutoBuildGraphToggle}
+          />
+          Auto-build knowledge graph after ingest (real LLM cost -- off by default)
+        </label>
+      </div>
 
       {(local || provider === "ollama") && (
         <div className="mp-settings-field mp-settings-ollama">

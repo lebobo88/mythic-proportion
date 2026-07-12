@@ -14,7 +14,7 @@ failure never raises -- it degrades to an empty result so
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from mythic_proportion.graph.cache import LlmCache, read_through_complete
 from mythic_proportion.graph.tuples import (
@@ -134,6 +134,63 @@ class AuthHubExtractionClient:
         raise ExtractionError(f"AuthHub extraction failed after retries: {last_exc}") from last_exc
 
 
+class _TurnClient:
+    """Adapts a :class:`~mythic_proportion.privacy.redact.RedactingExtractionClient`
+    into the plain :class:`ExtractionClient` ``.complete()`` shape for one
+    extraction turn (initial call + repair + gleaning), accumulating every
+    newly-found redaction span into the shared ``turn_map`` and
+    deliberately NEVER rehydrating -- every completion this adapter returns
+    stays in redacted-text space until :func:`_finish_turn` rehydrates it
+    exactly once, at the very end of the whole turn. This is what closes the
+    PII cloud-egress leak: a prior round's completion, spliced verbatim into
+    a follow-up repair/gleaning prompt, can never carry real PII forward,
+    because it was never rehydrated in the first place.
+    """
+
+    def __init__(self, inner: Any, turn_map: dict[str, str]) -> None:
+        self._inner = inner
+        self._turn_map = turn_map
+
+    def complete(self, *, system: str, user: str) -> str:
+        return self._inner.complete_turn(system=system, user=user, turn_map=self._turn_map)
+
+
+def _start_turn(client: ExtractionClient) -> tuple[ExtractionClient, dict[str, str]]:
+    """Wrap ``client`` for one multi-round extraction turn.
+
+    A :class:`~mythic_proportion.privacy.redact.RedactingExtractionClient`
+    is wrapped in :class:`_TurnClient` so every call within the turn stays
+    redacted until :func:`_finish_turn` rehydrates the final parsed fields
+    exactly once. Any other (non-redacting) client passes through
+    unchanged -- ``turn_map`` stays empty and :func:`_finish_turn` becomes a
+    no-op, so behavior for every existing non-redacting caller (tests, a
+    vault with redaction disabled) is byte-identical to before this fix.
+    """
+    from mythic_proportion.privacy.redact import RedactingExtractionClient
+
+    turn_map: dict[str, str] = {}
+    if isinstance(client, RedactingExtractionClient):
+        return _TurnClient(client, turn_map), turn_map
+    return client, turn_map
+
+
+def _finish_turn(client: ExtractionClient, text: str, turn_map: dict[str, str]) -> str:
+    """Rehydrate ``text`` using ``turn_map`` -- the ONE point in an
+    extraction turn where redacted text is allowed to become real PII again.
+    Call this per final field (entity title/description, relationship
+    description, claim description, ...) after all repair/gleaning rounds
+    are done and the response has been parsed into records -- never on raw
+    completion text that might still get spliced into another prompt. A
+    no-op (returns ``text`` unchanged) for a non-redacting client or an
+    empty ``turn_map``.
+    """
+    from mythic_proportion.privacy.redact import RedactingExtractionClient
+
+    if not turn_map or not isinstance(client, RedactingExtractionClient):
+        return text
+    return client.rehydrate_turn(text, turn_map)
+
+
 def _parse_with_one_repair(
     raw_text: str, *, client: ExtractionClient, cache: LlmCache, model: str
 ) -> tuple[list[list[str]], int]:
@@ -173,18 +230,26 @@ def extract_entities_relationships(
     system, user = build_extract_graph_prompt(text)
     llm_calls = 0
 
-    response, hit = read_through_complete(client, cache, system=system, user=user, model=model)
+    # Turn-scoped redaction (closes a PII cloud-egress leak -- see
+    # `RedactingExtractionClient`'s docstring / `_start_turn`/`_finish_turn`
+    # above): every completion made via `call_client` for the rest of this
+    # function stays in redacted-text space, no matter how many
+    # repair/gleaning rounds it takes. Real PII is only reconstituted once,
+    # per final field, at the very end via `_finish_turn`.
+    call_client, turn_map = _start_turn(client)
+
+    response, hit = read_through_complete(call_client, cache, system=system, user=user, model=model)
     if not hit:
         llm_calls += 1
 
-    all_records, repair_calls = _parse_with_one_repair(response, client=client, cache=cache, model=model)
+    all_records, repair_calls = _parse_with_one_repair(response, client=call_client, cache=cache, model=model)
     llm_calls += repair_calls
 
     running_transcript = response
     for _ in range(max_gleanings):
         glean_user = f"{user}\n\n---\nYour previous output:\n{running_transcript}\n\n{build_gleaning_prompt()}"
         glean_response, glean_hit = read_through_complete(
-            client, cache, system=system, user=glean_user, model=model
+            call_client, cache, system=system, user=glean_user, model=model
         )
         if not glean_hit:
             llm_calls += 1
@@ -194,7 +259,7 @@ def extract_entities_relationships(
             break
 
         glean_records, glean_repair_calls = _parse_with_one_repair(
-            glean_response, client=client, cache=cache, model=model
+            glean_response, client=call_client, cache=cache, model=model
         )
         llm_calls += glean_repair_calls
         if not glean_records:
@@ -209,7 +274,7 @@ def extract_entities_relationships(
     for fields in all_records:
         kind = fields[0].lower()
         if kind == "entity" and len(fields) >= 4:
-            title = normalize_title(fields[1])
+            title = normalize_title(_finish_turn(client, fields[1], turn_map))
             if not title:
                 continue
             entity_type = normalize_entity_type(fields[2])
@@ -217,13 +282,14 @@ def extract_entities_relationships(
             if key in seen_entities:
                 continue
             seen_entities.add(key)
-            entities.append(ExtractedEntity(title=title, type=entity_type, description=fields[3]))
+            description = _finish_turn(client, fields[3], turn_map)
+            entities.append(ExtractedEntity(title=title, type=entity_type, description=description))
         elif kind == "relationship" and len(fields) >= 4:
-            source = normalize_title(fields[1])
-            target = normalize_title(fields[2])
+            source = normalize_title(_finish_turn(client, fields[1], turn_map))
+            target = normalize_title(_finish_turn(client, fields[2], turn_map))
             if not source or not target:
                 continue
-            description = fields[3]
+            description = _finish_turn(client, fields[3], turn_map)
             weight = 1.0
             if len(fields) >= 5:
                 try:
