@@ -540,3 +540,151 @@ def test_openai_privacy_filter_recognizer_marks_unavailable_without_torch(monkey
 
     results = recognizer.analyze("Contact John Smith.", entities=list(OPENAI_FILTER_ENTITIES))
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Chunking (OOM fix for large community-report-shaped inputs)
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_text_for_pipeline_small_text_single_chunk() -> None:
+    """Fast path: text at/under the limit is returned as one untouched
+    ``(0, text)`` chunk -- byte-identical to pre-chunking behavior."""
+    from mythic_proportion.privacy.redact import (
+        _MAX_PIPELINE_CHUNK_CHARS,
+        _chunk_text_for_pipeline,
+    )
+
+    text = "Contact John Smith at john@example.com."
+    assert len(text) <= _MAX_PIPELINE_CHUNK_CHARS
+    assert _chunk_text_for_pipeline(text) == [(0, text)]
+
+
+def test_chunk_text_for_pipeline_large_text_splits_and_reconstructs() -> None:
+    """Large text is split into multiple bounded chunks whose offsets
+    correctly reconstruct the original text when concatenated back
+    together, and no chunk exceeds the configured character budget."""
+    from mythic_proportion.privacy.redact import (
+        _MAX_PIPELINE_CHUNK_CHARS,
+        _chunk_text_for_pipeline,
+    )
+
+    sentence = "The quick brown fox jumps over the lazy dog. "
+    text = sentence * 400  # tens of thousands of characters
+    assert len(text) > _MAX_PIPELINE_CHUNK_CHARS * 3
+
+    chunks = _chunk_text_for_pipeline(text)
+
+    assert len(chunks) > 1
+    for offset, chunk in chunks:
+        assert len(chunk) <= _MAX_PIPELINE_CHUNK_CHARS
+        assert text[offset : offset + len(chunk)] == chunk
+
+    reconstructed = "".join(chunk for _offset, chunk in chunks)
+    assert reconstructed == text
+
+
+def test_openai_privacy_filter_recognizer_chunks_large_text_and_remaps_offsets(
+    monkeypatch,
+) -> None:
+    """The recognizer must never feed the full unbounded text to the HF
+    pipeline in one call (that's what OOM'd on a real community-report
+    prompt) -- it must chunk, invoke the pipeline once per chunk, and remap
+    each chunk-relative token offset the (mocked) pipeline returns back into
+    the ORIGINAL full-text coordinate space."""
+    import sys
+
+    from mythic_proportion.privacy.redact import _MAX_PIPELINE_CHUNK_CHARS
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    recognizer = OpenAIPrivacyFilterRecognizer()
+    # Confirms load() degraded (no real model was loaded here) before we
+    # inject a fake pipeline directly -- see this file's
+    # test_openai_privacy_filter_recognizer_marks_unavailable_without_torch.
+    assert recognizer.model_unavailable is True
+
+    # A big filler body (tens of thousands of characters), comfortably
+    # larger than several chunk-widths, with a planted PII entity placed
+    # right around where a chunk boundary is likely to fall.
+    filler = "the quick brown fox jumps over the lazy dog and keeps running " * 30
+    # Place the planted PII squarely in the MIDDLE of the second chunk (not
+    # right at a chunk boundary, which would make the test's expected chunk
+    # count/offset brittle rather than exercising the general remap logic).
+    padding = "z " * (_MAX_PIPELINE_CHUNK_CHARS // 2)
+    text = filler + padding + "John Smith was here. " + padding + filler * 5
+    expected_start = text.index("John Smith")
+    expected_end = expected_start + len("John Smith")
+    assert len(text) > _MAX_PIPELINE_CHUNK_CHARS * 3
+
+    pipeline_calls: list[str] = []
+
+    def fake_pipeline(chunk_text: str) -> list[dict]:
+        pipeline_calls.append(chunk_text)
+        assert len(chunk_text) <= _MAX_PIPELINE_CHUNK_CHARS
+        idx = chunk_text.find("John Smith")
+        if idx == -1:
+            return []
+        return [
+            {
+                "entity_group": "PERSON",
+                "start": idx,
+                "end": idx + len("John Smith"),
+                "score": 0.99,
+            }
+        ]
+
+    recognizer._pipeline = fake_pipeline
+
+    results = recognizer.analyze(text, entities=list(OPENAI_FILTER_ENTITIES))
+
+    # Chunked, not one giant unbounded call.
+    assert len(pipeline_calls) > 1
+    assert all(len(c) <= _MAX_PIPELINE_CHUNK_CHARS for c in pipeline_calls)
+
+    assert len(results) == 1
+    assert results[0].entity_type == "PERSON"
+    # Offsets are in the ORIGINAL text's coordinate space, not chunk-relative.
+    assert results[0].start == expected_start
+    assert results[0].end == expected_end
+    assert text[results[0].start : results[0].end] == "John Smith"
+
+
+def test_openai_privacy_filter_recognizer_small_text_unchanged(monkeypatch) -> None:
+    """Regression check: a normal small text still produces identical
+    results before/after the chunking fix -- single chunk, single pipeline
+    call, no behavior change."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    recognizer = OpenAIPrivacyFilterRecognizer()
+    assert recognizer.model_unavailable is True
+
+    text = "Contact John Smith about the report."
+    pipeline_calls: list[str] = []
+
+    def fake_pipeline(chunk_text: str) -> list[dict]:
+        pipeline_calls.append(chunk_text)
+        idx = chunk_text.find("John Smith")
+        if idx == -1:
+            return []
+        return [
+            {
+                "entity_group": "PERSON",
+                "start": idx,
+                "end": idx + len("John Smith"),
+                "score": 0.95,
+            }
+        ]
+
+    recognizer._pipeline = fake_pipeline
+
+    results = recognizer.analyze(text, entities=list(OPENAI_FILTER_ENTITIES))
+
+    assert pipeline_calls == [text]  # exactly one call, with the whole text
+    assert len(results) == 1
+    assert results[0].start == text.index("John Smith")
+    assert results[0].end == text.index("John Smith") + len("John Smith")

@@ -76,6 +76,84 @@ from mythic_proportion.config import Settings
 _INSTALL_HINT = "pip install 'mythic-proportion[privacy]'"
 _FULL_INSTALL_HINT = "pip install 'mythic-proportion[privacy,privacy-full]'"
 
+#: Conservative max chunk length, in characters, fed to the OpenAI Privacy
+#: Filter's ``transformers`` token-classification pipeline in a single call
+#: (see :class:`OpenAIPrivacyFilterRecognizer`'s ``_Delegate.analyze``).
+#:
+#: **Why this fixes the OOM.** GraphRAG community-report generation
+#: (``graph.reports.generate_community_reports``) can hand this recognizer
+#: several-hundred-KB prompts once extraction reads full ``raw/`` source
+#: documents (see commit b5ec6e1) rather than the old tiny ``wiki/``
+#: summaries. Feeding that whole string into the HF pipeline in one call lets
+#: the underlying transformer's attention-mask materialization
+#: (``transformers/masking_utils.py``'s non-vmap ``sdpa_mask``/``eager_mask``
+#: path) scale badly with sequence length, which is what produced the
+#: observed ``CUDA out of memory. Tried to allocate 24.18 GiB`` crash on a
+#: 12 GB GPU.
+#:
+#: **Why this value.** The model's own config
+#: (``outer._pipeline.model.config.max_position_embeddings``) is the
+#: authoritative token-length cap, but it is a *token* count, not a character
+#: count, and isn't reliably present/introspectable across every
+#: transformers backend/model revision without adding a hard dependency on
+#: that attribute existing. Rather than risk an ``AttributeError`` on some
+#: model variant, this is a hardcoded, conservative character budget instead:
+#: ~2500 characters is comfortably under typical small token-classification
+#: models' position-embedding limits (usually 512 tokens; English prose
+#: averages ~4-5 characters/token, so 2500 chars is roughly 500-625 tokens
+#: worst case, i.e. already at or near a 512-token ceiling by design -- the
+#: conservative direction, favoring more/smaller chunks over risking another
+#: OOM/truncation on a model with an even smaller limit).
+_MAX_PIPELINE_CHUNK_CHARS = 2500
+
+
+def _chunk_text_for_pipeline(text: str) -> list[tuple[int, str]]:
+    """Split ``text`` into ``(start_offset, chunk)`` pairs, each chunk no
+    longer than :data:`_MAX_PIPELINE_CHUNK_CHARS`, so callers can feed each
+    chunk to the HF pipeline separately and remap the chunk-relative token
+    offsets the pipeline returns back into ``text``'s own coordinate space
+    (``start_offset + token_offset``).
+
+    Fast path: text already at or under the limit returns a single
+    ``(0, text)`` chunk -- byte-identical behavior (and thus identical
+    ``RecognizerResult`` offsets) to the pre-chunking code for every input
+    that previously worked fine, so no regression for normal-sized inputs.
+
+    Splitting prefers whitespace boundaries close to (but not over) the
+    limit, to avoid slicing through the middle of a word -- and, by
+    extension, the middle of a short PII span. **Known limitation
+    (deliberately not engineered further, see module docstring guidance):**
+    if a PII entity happens to straddle a chunk boundary anyway, it may go
+    undetected in the half of it visible to each side, or be detected with a
+    boundary-truncated span. Names/emails/phone numbers are all short
+    relative to a several-thousand-character chunk, so this is a
+    low-probability edge case, not a systematic detection hole.
+    """
+    if len(text) <= _MAX_PIPELINE_CHUNK_CHARS:
+        return [(0, text)]
+
+    chunks: list[tuple[int, str]] = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        end = min(pos + _MAX_PIPELINE_CHUNK_CHARS, n)
+        if end < n:
+            # Prefer to back off to the nearest preceding whitespace run so
+            # we don't split mid-word (and thus mid-entity). Only look back
+            # within this chunk's own span, and only bother if we find
+            # whitespace reasonably close to the hard limit -- otherwise
+            # (e.g. one giant unbroken token) just hard-split at the limit.
+            split_at = text.rfind(" ", pos, end)
+            if split_at == -1:
+                split_at = text.rfind("\n", pos, end)
+            if split_at != -1 and split_at > pos:
+                end = split_at + 1  # include the whitespace char in this chunk
+        chunk = text[pos:end]
+        if chunk:
+            chunks.append((pos, chunk))
+        pos = end
+    return chunks
+
 
 class RedactionUnavailableError(RuntimeError):
     """Raised by :func:`get_redactor` when redaction is *enabled* in
@@ -234,21 +312,27 @@ class OpenAIPrivacyFilterRecognizer:
                     self.load()
                 if outer._pipeline is None:
                     return []
-                raw = outer._pipeline(text)  # type: ignore[misc]
                 results: list[Any] = []
-                for token in raw:
-                    label = str(token.get("entity_group") or token.get("entity") or "").upper()
-                    entity_type = _OPENAI_LABEL_TO_ENTITY.get(label)
-                    if entity_type is None or (entities and entity_type not in entities):
+                for chunk_offset, chunk_text in _chunk_text_for_pipeline(text):
+                    if not chunk_text:
                         continue
-                    results.append(
-                        RecognizerResult(
-                            entity_type=entity_type,
-                            start=int(token["start"]),
-                            end=int(token["end"]),
-                            score=float(token.get("score", 0.9)),
+                    raw = outer._pipeline(chunk_text)  # type: ignore[misc]
+                    for token in raw:
+                        label = str(token.get("entity_group") or token.get("entity") or "").upper()
+                        entity_type = _OPENAI_LABEL_TO_ENTITY.get(label)
+                        if entity_type is None or (entities and entity_type not in entities):
+                            continue
+                        results.append(
+                            RecognizerResult(
+                                entity_type=entity_type,
+                                # Remap chunk-relative offsets back into the
+                                # ORIGINAL full-text coordinate space -- see
+                                # _chunk_text_for_pipeline's docstring.
+                                start=chunk_offset + int(token["start"]),
+                                end=chunk_offset + int(token["end"]),
+                                score=float(token.get("score", 0.9)),
+                            )
                         )
-                    )
                 return results
 
         return _Delegate()
