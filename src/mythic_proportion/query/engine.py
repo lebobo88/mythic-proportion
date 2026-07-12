@@ -45,7 +45,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.config import (
+    Settings,
+    authhub_api_key,
+    authhub_base_url,
+    effective_allow_egress,
+    load_settings,
+)
 from mythic_proportion.graph.cache import LlmCache
 from mythic_proportion.graph.extract import ExtractionClient
 from mythic_proportion.graph.store import GraphStore
@@ -163,6 +169,12 @@ def _default_client(settings: Settings) -> AnswerClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
+        if not effective_allow_egress(settings):
+            raise AnswerError(
+                "Egress is disabled (allow_egress=False): refusing to construct a cloud "
+                "provider=anthropic client. Set allow_egress=True, or use local=True/"
+                "llm_provider='ollama' instead."
+            )
         return AnthropicAnswerClient(model=settings.model, api_key=api_key)
 
     if settings.llm_provider == "authhub":
@@ -171,6 +183,12 @@ def _default_client(settings: Settings) -> AnswerClient:
         if not api_key:
             raise AnswerError(
                 f"LLM not configured: set AUTHHUB_API_KEY (provider=authhub, base_url={base_url!r})"
+            )
+        if not effective_allow_egress(settings):
+            raise AnswerError(
+                "Egress is disabled (allow_egress=False): refusing to construct a cloud "
+                f"provider=authhub client (base_url={base_url!r}). Set allow_egress=True, "
+                "or use local=True/llm_provider='ollama' instead."
             )
         from mythic_proportion.llm.authhub import AuthHubAnswerClient
 
@@ -241,6 +259,12 @@ def _default_extraction_client(settings: Settings) -> ExtractionClient:
         raise AnswerError(
             f"LLM not configured: set AUTHHUB_API_KEY (provider=authhub, "
             f"base_url={authhub_base_url(settings)!r})"
+        )
+    if not effective_allow_egress(settings):
+        raise AnswerError(
+            "Egress is disabled (allow_egress=False): refusing to construct a cloud "
+            f"provider=authhub extraction client (base_url={authhub_base_url(settings)!r}). "
+            "Set allow_egress=True, or use local=True/llm_provider='ollama' instead."
         )
     from mythic_proportion.graph.extract import AuthHubExtractionClient
 

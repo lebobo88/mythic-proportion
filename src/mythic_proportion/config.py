@@ -41,7 +41,19 @@ class Settings(BaseSettings):
     #: the extra isn't installed); ``"none"``/``"off"``/``"disabled"`` means
     #: BM25-only.
     embeddings_backend: str = "auto"
-    allow_egress: bool = False
+    #: Phase 6: whether the cloud-provider branches (``llm_provider in
+    #: {"anthropic", "authhub"}``) of the provider selector may construct a
+    #: non-localhost client at all, once a required credential is present.
+    #: Defaults to ``True`` -- preserving this app's pre-existing behavior of
+    #: reaching a cloud LLM provider by default (it is not a local-only app
+    #: by default; :attr:`local` is the explicit opt-in for that). Set this
+    #: to ``False`` to make the cloud branches fail closed with an
+    #: actionable :class:`~mythic_proportion.query.client.AnswerError` /
+    #: :class:`~mythic_proportion.compile.models.CompileError` instead of
+    #: ever constructing a cloud client -- see
+    #: :func:`effective_allow_egress` and ADR-0005 S4 for the precedence
+    #: rule against :attr:`local`.
+    allow_egress: bool = True
 
     #: Which LLM provider ``compile``/``query`` route through: ``"authhub"``
     #: (default -- an OpenAI-compatible multi-provider gateway),
@@ -81,6 +93,24 @@ class Settings(BaseSettings):
     #: Optional AuthHub routing hint, forwarded as ``route_alias`` in the
     #: request body only when non-empty.
     route_alias: str | None = None
+
+
+def effective_allow_egress(settings: Settings) -> bool:
+    """The single derived egress control at the cloud-provider trust boundary.
+
+    ``effective_allow_egress = allow_egress AND NOT local`` (ADR-0005 S4):
+    ``local: true`` always wins and forces this to ``False`` regardless of
+    the stored ``allow_egress`` value (the local-mode provider selection in
+    :func:`mythic_proportion.query.engine._default_client` and its siblings
+    never consults this at all -- ``local: true`` routes to Ollama
+    unconditionally and never reaches a cloud-branch call site). On a
+    ``local: false`` vault this resolves to the stored ``allow_egress``
+    value unchanged, which is what the cloud-provider branches
+    (``llm_provider in {"anthropic", "authhub"}``) gate their outbound call
+    on, once a required credential is present (see those call sites' own
+    docstrings for why the credential check runs first).
+    """
+    return settings.allow_egress and not settings.local
 
 
 def authhub_api_key() -> str | None:

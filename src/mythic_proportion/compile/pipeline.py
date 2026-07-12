@@ -30,7 +30,13 @@ from mythic_proportion.compile.graph import existing_page_titles, refresh_hot, r
 from mythic_proportion.compile.models import CompileError, CompileResult
 from mythic_proportion.compile.prompt import build_compile_prompt
 from mythic_proportion.compile.writer import write_page
-from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.config import (
+    Settings,
+    authhub_api_key,
+    authhub_base_url,
+    effective_allow_egress,
+    load_settings,
+)
 from mythic_proportion.ingest.dedup import Ledger
 from mythic_proportion.ingest.models import IngestedSource
 from mythic_proportion.ingest.pipeline import LEDGER_RELATIVE_PATH, STAGING_RELATIVE_DIR
@@ -213,6 +219,12 @@ def _default_client(settings: Settings) -> CompileClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
+        if not effective_allow_egress(settings):
+            raise CompileError(
+                "Egress is disabled (allow_egress=False): refusing to construct a cloud "
+                "provider=anthropic client. Set allow_egress=True, or use local=True/"
+                "llm_provider='ollama' instead."
+            )
         return AnthropicCompileClient(model=settings.model, api_key=api_key)
 
     if settings.llm_provider == "authhub":
@@ -221,6 +233,12 @@ def _default_client(settings: Settings) -> CompileClient:
         if not api_key:
             raise CompileError(
                 f"LLM not configured: set AUTHHUB_API_KEY (provider=authhub, base_url={base_url!r})"
+            )
+        if not effective_allow_egress(settings):
+            raise CompileError(
+                "Egress is disabled (allow_egress=False): refusing to construct a cloud "
+                f"provider=authhub client (base_url={base_url!r}). Set allow_egress=True, "
+                "or use local=True/llm_provider='ollama' instead."
             )
         from mythic_proportion.llm.authhub import AuthHubCompileClient
 
