@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mythic_proportion.graph.cache import LlmCache, read_through_complete
+from mythic_proportion.graph.cache import LlmCache
 from mythic_proportion.graph.extract import (
     ExtractionClient,
+    _cached_turn_call,
     _finish_turn,
     _parse_with_one_repair,
     _start_turn,
@@ -68,10 +69,12 @@ def extract_claims(
     # spliced text must stay redacted the whole way through, and is only
     # rehydrated once, per final claim field, after parsing.
     call_client, turn_map = _start_turn(client)
-    response, hit = read_through_complete(call_client, cache, system=system, user=user, model=model)
+    response, hit = _cached_turn_call(call_client, cache, turn_map, system=system, user=user, model=model)
     llm_calls = 0 if hit else 1
 
-    records, repair_calls = _parse_with_one_repair(response, client=call_client, cache=cache, model=model)
+    records, repair_calls = _parse_with_one_repair(
+        response, client=call_client, cache=cache, model=model, turn_map=turn_map
+    )
     llm_calls += repair_calls
 
     claims: list[ExtractedClaim] = []

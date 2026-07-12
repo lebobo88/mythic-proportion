@@ -98,6 +98,17 @@ class _CapturingInnerClient:
                 assert needle not in user, f"outbound payload leaked PII {needle!r}: {user!r}"
 
 
+class _ExplodingInnerClient:
+    """Stands in for the real cloud LLM on a run that MUST be served
+    entirely from the ``llm_cache`` -- any ``complete()`` call reaching this
+    client proves a cache-hit round was (wrongly) treated as a cache miss.
+    Used by the cache-hit egress test below, which asserts zero calls ever
+    land here."""
+
+    def complete(self, *, system: str, user: str) -> str:  # pragma: no cover - must never run
+        raise AssertionError(f"unexpected outbound LLM call on a run that should be 100% cache hits: {user!r}")
+
+
 def test_extraction_turn_repair_and_gleaning_never_leak_pii_and_final_records_are_clean() -> None:
     # Round 1 (initial extraction call): malformed, unparseable output --
     # forces a repair round-trip (`_parse_with_one_repair`).
@@ -133,6 +144,88 @@ def test_extraction_turn_repair_and_gleaning_never_leak_pii_and_final_records_ar
 
     # (b) No REDACTED_* placeholder may survive into the final persisted
     # entity/relationship record -- and the real PII must have come back.
+    for entity in entities:
+        assert "REDACTED_" not in entity.title
+        assert "REDACTED_" not in entity.description
+    for relationship in relationships:
+        assert "REDACTED_" not in relationship.source
+        assert "REDACTED_" not in relationship.target
+        assert "REDACTED_" not in relationship.description
+
+    assert any(PLANTED_NAME.upper() in e.title for e in entities)
+    assert any(PLANTED_EMAIL in e.description or PLANTED_PHONE in e.description for e in entities)
+
+
+def test_extraction_turn_cache_hit_path_never_leaks_pii_and_final_records_are_clean() -> None:
+    """Reflexion-retry regression test (cache-boundary defect, retry 1/1).
+
+    The previous fix made `_start_turn`/`_finish_turn` correctly turn-scope
+    redaction for a genuine cache MISS, but the read-through cache was keyed
+    on the RAW (unredacted) text and a cache HIT bypassed the client
+    entirely -- so `turn_map` never got populated on a hit, and any
+    `[REDACTED_*]` token baked into the cached response could never be
+    rehydrated, surviving into the final persisted record. This test drives
+    the exact same multi-round (repair + gleaning, with its own repair)
+    scenario as the cache-MISS test above, but on a SECOND extraction call
+    that reuses the SAME `llm_cache`-backed sqlite connection with a
+    DIFFERENT inner client that raises if it is ever called -- proving the
+    second run is served 100% from the cache -- and asserts:
+
+    (a) zero outbound payloads (there are none -- the exploding client is
+        never invoked) contain unredacted PII, and
+    (b) the final parsed entities/relationships from the cache-hit run
+        contain zero `REDACTED_*` tokens, exactly like a cache-miss run.
+
+    The original cache-miss test's `llm_calls == len(responses)` assertion
+    is untouched (this is additive coverage, not a replacement).
+    """
+    responses = [
+        "sorry, I could not find any entities in that text",
+        '("entity"<|>[REDACTED_PERSON_1]<|>PERSON<|>Reachable at [REDACTED_EMAIL_ADDRESS_1])<|COMPLETE|>',
+        "nothing well-formed to add here either, my apologies",
+        (
+            '("entity"<|>[REDACTED_PERSON_1]<|>PERSON<|>Also reachable at [REDACTED_PHONE_NUMBER_1])##'
+            '("relationship"<|>[REDACTED_PERSON_1]<|>[REDACTED_EMAIL_ADDRESS_1]<|>owns<|>5)<|COMPLETE|>'
+        ),
+    ]
+    conn = _memory_conn()
+    cache = LlmCache(conn)
+
+    # First run: genuine cache MISS on every round -- warms the cache with
+    # redacted-space responses (this is what the run above also proves, but
+    # is re-derived here so this test is fully self-contained / order-
+    # independent from the other test function).
+    warm_inner = _CapturingInnerClient(responses)
+    warm_client = RedactingExtractionClient(warm_inner, _redactor())
+    warm_entities, warm_relationships, warm_llm_calls = extract_entities_relationships(
+        SOURCE_TEXT, client=warm_client, cache=cache, model="mock", max_gleanings=1
+    )
+    warm_inner.assert_never_leaked_pii()
+    assert warm_llm_calls == len(responses)
+    assert all("REDACTED_" not in e.title and "REDACTED_" not in e.description for e in warm_entities)
+
+    # Second run: identical inputs (same SOURCE_TEXT, same model, same
+    # RedactingExtractionClient config) against the SAME cache -- every
+    # round MUST be a cache hit. The inner client explodes if it is ever
+    # actually called, so a passing test proves this really was cache-hit-
+    # driven, not accidentally falling back to fresh LLM calls.
+    hot_inner = _ExplodingInnerClient()
+    hot_client = RedactingExtractionClient(hot_inner, _redactor())
+
+    entities, relationships, llm_calls = extract_entities_relationships(
+        SOURCE_TEXT, client=hot_client, cache=cache, model="mock", max_gleanings=1
+    )
+
+    # (a) Zero outbound LLM calls at all on this run -- and therefore zero
+    # possibility of a PII-carrying outbound payload -- proves this really
+    # was served entirely from the cache.
+    assert llm_calls == 0
+
+    # (b) No REDACTED_* placeholder may survive into the final persisted
+    # entity/relationship record on a cache-hit-driven run, exactly like a
+    # cache-miss run -- this is the assertion that would have failed before
+    # the cache-boundary fix (turn_map would have stayed empty on every hit).
+    assert entities and relationships
     for entity in entities:
         assert "REDACTED_" not in entity.title
         assert "REDACTED_" not in entity.description

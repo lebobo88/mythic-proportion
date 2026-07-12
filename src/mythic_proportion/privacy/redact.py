@@ -601,6 +601,20 @@ class RedactingExtractionClient:
     have been parsed), is allowed to bring real PII back. See
     ``graph.extract._start_turn``/``_finish_turn`` for the orchestration
     side of this contract.
+
+    **Cache-boundary note (closes a cache-hit PII/placeholder-survival
+    bug).** :meth:`redact_for_turn`/:meth:`complete_raw` are the two
+    primitives :meth:`complete_turn` composes -- split out so a caller (see
+    ``graph.extract._cached_turn_call``) can put the llm_cache lookup
+    strictly BETWEEN redaction and the network call. This matters because
+    redaction is a deterministic, purely-local, non-network function of its
+    input text: replaying :meth:`redact_for_turn` for the exact same text on
+    a cache HIT reproduces the identical redacted text/map that produced the
+    already-cached response, so ``turn_map`` still gets populated -- and
+    :meth:`rehydrate_turn` still runs correctly -- even when the underlying
+    LLM call itself is skipped. Without this split, a cache hit would bypass
+    :meth:`complete_turn` entirely, leaving ``turn_map`` empty and any
+    ``[REDACTED_*]`` token in the cached response unrehydrated forever.
     """
 
     def __init__(self, inner: Any, redactor: Redactor) -> None:
@@ -618,16 +632,31 @@ class RedactingExtractionClient:
             return raw
         return self._redactor.rehydrate(raw, rehydrate_map)
 
-    def complete_turn(self, *, system: str, user: str, turn_map: dict[str, str]) -> str:
-        """Redact ``user``, merging any newly-found PII spans into the
-        shared ``turn_map`` (mutated in place), call the inner client, and
-        return the RAW completion WITHOUT rehydrating. ``user`` may itself
-        already contain ``[REDACTED_*]`` tokens spliced in from an earlier
-        round of the same turn -- that's expected and safe (they simply
-        won't match any new PII span)."""
-        redacted_user, new_map = self._redactor.redact(user)
+    def redact_for_turn(self, text: str, turn_map: dict[str, str]) -> str:
+        """Redact ``text`` LOCALLY (no network call), merging any newly-found
+        PII spans into the shared ``turn_map`` (mutated in place), and return
+        the redacted text. ``text`` may itself already contain
+        ``[REDACTED_*]`` tokens spliced in from an earlier round of the same
+        turn -- that's expected and safe (they simply won't match any new PII
+        span). See the class docstring's "cache-boundary note" for why this
+        is split out from :meth:`complete_turn`."""
+        redacted_text, new_map = self._redactor.redact(text)
         turn_map.update(new_map)
-        return self._inner.complete(system=system, user=redacted_user)
+        return redacted_text
+
+    def complete_raw(self, *, system: str, user: str) -> str:
+        """Call the wrapped inner client directly with NO redact/rehydrate.
+        Only safe once ``user`` has already been redacted (e.g. via
+        :meth:`redact_for_turn`) by the caller."""
+        return self._inner.complete(system=system, user=user)
+
+    def complete_turn(self, *, system: str, user: str, turn_map: dict[str, str]) -> str:
+        """Redact ``user`` (via :meth:`redact_for_turn`) then call the inner
+        client (via :meth:`complete_raw`), returning the RAW completion
+        WITHOUT rehydrating. Convenience composition of the two primitives
+        above for a caller that doesn't need cache-boundary control."""
+        redacted_user = self.redact_for_turn(user, turn_map)
+        return self.complete_raw(system=system, user=redacted_user)
 
     def rehydrate_turn(self, text: str, turn_map: dict[str, str]) -> str:
         """Reverse every ``[REDACTED_*]`` token in ``text`` using the

@@ -16,14 +16,30 @@ import sqlite3
 from typing import Protocol, runtime_checkable
 
 
+CACHE_SCHEMA_VERSION = "2"
+"""Folded into every :func:`cache_key`. Bumped (1 -> 2) by the Reflexion-retry
+fix for the cache-boundary PII/REDACTED_* survival defect (turn-scoped
+redaction moved to be keyed on the REDACTED text, not the raw text -- see
+:mod:`mythic_proportion.graph.extract`'s ``_cached_turn_call``). Bumping this
+constant is what makes every ``llm_cache`` row written under the OLD
+(pre-fix) code -- including rows holding fully-rehydrated real-PII response
+text from the original one-shot ``complete()`` path -- permanently
+unreachable under the new key space, instead of relying only on the implicit
+"redacted text differs from raw text" key-basis change to keep them from
+ever being blindly replayed. Bump this again for any future change to what
+``cache_key``'s inputs mean."""
+
+
 def cache_key(*, system: str, user: str, model: str) -> str:
-    """``sha256(system || "\\x00" || user || "\\x00" || model)``, hex-encoded.
+    """``sha256(version || "\\x00" || system || "\\x00" || user || "\\x00" || model)``,
+    hex-encoded.
 
     The NUL separators make the key unambiguous even if ``system``/``user``
     text happens to contain the literal string used elsewhere as a
-    delimiter (unlike a plain ``"||"`` join).
+    delimiter (unlike a plain ``"||"`` join). ``version`` is
+    :data:`CACHE_SCHEMA_VERSION` -- see its docstring for why it's folded in.
     """
-    payload = "\x00".join((system, user, model)).encode("utf-8")
+    payload = "\x00".join((CACHE_SCHEMA_VERSION, system, user, model)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 

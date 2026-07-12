@@ -134,44 +134,30 @@ class AuthHubExtractionClient:
         raise ExtractionError(f"AuthHub extraction failed after retries: {last_exc}") from last_exc
 
 
-class _TurnClient:
-    """Adapts a :class:`~mythic_proportion.privacy.redact.RedactingExtractionClient`
-    into the plain :class:`ExtractionClient` ``.complete()`` shape for one
-    extraction turn (initial call + repair + gleaning), accumulating every
-    newly-found redaction span into the shared ``turn_map`` and
-    deliberately NEVER rehydrating -- every completion this adapter returns
-    stays in redacted-text space until :func:`_finish_turn` rehydrates it
-    exactly once, at the very end of the whole turn. This is what closes the
-    PII cloud-egress leak: a prior round's completion, spliced verbatim into
-    a follow-up repair/gleaning prompt, can never carry real PII forward,
-    because it was never rehydrated in the first place.
+class _RawCaller:
+    """Adapts a :class:`~mythic_proportion.privacy.redact.RedactingExtractionClient`'s
+    ``.complete_raw()`` into the plain :class:`ExtractionClient` ``.complete()``
+    shape, so :func:`~mythic_proportion.graph.cache.read_through_complete` can
+    call it uniformly on a cache miss without knowing about redaction at all.
+    ``user`` passed in here must already be redacted (see
+    :func:`_cached_turn_call`) -- this wrapper performs NO redaction itself.
     """
 
-    def __init__(self, inner: Any, turn_map: dict[str, str]) -> None:
+    def __init__(self, inner: Any) -> None:
         self._inner = inner
-        self._turn_map = turn_map
 
     def complete(self, *, system: str, user: str) -> str:
-        return self._inner.complete_turn(system=system, user=user, turn_map=self._turn_map)
+        return self._inner.complete_raw(system=system, user=user)
 
 
 def _start_turn(client: ExtractionClient) -> tuple[ExtractionClient, dict[str, str]]:
-    """Wrap ``client`` for one multi-round extraction turn.
-
-    A :class:`~mythic_proportion.privacy.redact.RedactingExtractionClient`
-    is wrapped in :class:`_TurnClient` so every call within the turn stays
-    redacted until :func:`_finish_turn` rehydrates the final parsed fields
-    exactly once. Any other (non-redacting) client passes through
-    unchanged -- ``turn_map`` stays empty and :func:`_finish_turn` becomes a
-    no-op, so behavior for every existing non-redacting caller (tests, a
-    vault with redaction disabled) is byte-identical to before this fix.
-    """
-    from mythic_proportion.privacy.redact import RedactingExtractionClient
-
-    turn_map: dict[str, str] = {}
-    if isinstance(client, RedactingExtractionClient):
-        return _TurnClient(client, turn_map), turn_map
-    return client, turn_map
+    """Start one multi-round extraction turn. Returns ``(client, turn_map)``
+    unchanged/empty respectively -- ``client`` is returned as-is (no
+    wrapping); every call within the turn instead goes through
+    :func:`_cached_turn_call`, which redacts explicitly. Kept as a tiny
+    named entry point (rather than inlining ``{}``) purely so call sites
+    read the same as before this fix."""
+    return client, {}
 
 
 def _finish_turn(client: ExtractionClient, text: str, turn_map: dict[str, str]) -> str:
@@ -191,8 +177,54 @@ def _finish_turn(client: ExtractionClient, text: str, turn_map: dict[str, str]) 
     return client.rehydrate_turn(text, turn_map)
 
 
+def _cached_turn_call(
+    client: ExtractionClient,
+    cache: LlmCache,
+    turn_map: dict[str, str],
+    *,
+    system: str,
+    user: str,
+    model: str,
+) -> tuple[str, bool]:
+    """One cached completion call within a turn-scoped extraction turn.
+
+    Redaction happens FIRST, locally, unconditionally (no network call) --
+    merging any newly-found PII spans into the shared ``turn_map`` -- and
+    the llm_cache lookup/store is keyed on the REDACTED text, not the raw
+    text. This is deliberately different from a naive "cache wraps
+    complete_turn()" design: it fixes a Reflexion-retry-flagged defect where
+    a cache HIT skipped the client call entirely, so ``turn_map`` never got
+    populated and any ``[REDACTED_*]`` token already baked into the cached
+    response could never be rehydrated, surviving all the way into a
+    persisted entity/relationship/claim record.
+
+    Because :meth:`~mythic_proportion.privacy.redact.RedactingExtractionClient.redact_for_turn`
+    is a deterministic, purely-local function of its input text, calling it
+    again for the exact same ``user`` text on a cache HIT reproduces the
+    identical redacted text/map that produced the already-cached response --
+    so ``turn_map`` ends up correctly populated whether this call is a hit
+    or a miss, and the cached response (redacted-space text) is exactly what
+    a follow-up round's prompt should splice in, no re-redaction needed.
+
+    For a non-redacting ``client`` this degenerates to the original
+    behavior: ``user`` passes through unchanged, ``turn_map`` stays empty,
+    and this is exactly ``read_through_complete(client, cache, ...)``.
+    """
+    from mythic_proportion.privacy.redact import RedactingExtractionClient
+
+    if isinstance(client, RedactingExtractionClient):
+        redacted_user = client.redact_for_turn(user, turn_map)
+        return read_through_complete(_RawCaller(client), cache, system=system, user=redacted_user, model=model)
+    return read_through_complete(client, cache, system=system, user=user, model=model)
+
+
 def _parse_with_one_repair(
-    raw_text: str, *, client: ExtractionClient, cache: LlmCache, model: str
+    raw_text: str,
+    *,
+    client: ExtractionClient,
+    cache: LlmCache,
+    model: str,
+    turn_map: dict[str, str],
 ) -> tuple[list[list[str]], int]:
     """Parse ``raw_text``; on a parse failure (non-empty input, zero records
     out), attempt exactly one repair round-trip, then give up (empty list,
@@ -202,9 +234,10 @@ def _parse_with_one_repair(
         return records, 0
 
     repair_user = build_repair_prompt(raw_text)
-    repaired, hit = read_through_complete(
+    repaired, hit = _cached_turn_call(
         client,
         cache,
+        turn_map,
         system="Repair malformed delimited-tuple output. Output only the corrected tuples.",
         user=repair_user,
         model=model,
@@ -232,24 +265,28 @@ def extract_entities_relationships(
 
     # Turn-scoped redaction (closes a PII cloud-egress leak -- see
     # `RedactingExtractionClient`'s docstring / `_start_turn`/`_finish_turn`
-    # above): every completion made via `call_client` for the rest of this
-    # function stays in redacted-text space, no matter how many
-    # repair/gleaning rounds it takes. Real PII is only reconstituted once,
-    # per final field, at the very end via `_finish_turn`.
+    # above): every completion made via `_cached_turn_call` for the rest of
+    # this function stays in redacted-text space, no matter how many
+    # repair/gleaning rounds it takes, and -- per the cache-boundary fix --
+    # `turn_map` gets populated on a cache HIT exactly as it would on a
+    # cache MISS. Real PII is only reconstituted once, per final field, at
+    # the very end via `_finish_turn`.
     call_client, turn_map = _start_turn(client)
 
-    response, hit = read_through_complete(call_client, cache, system=system, user=user, model=model)
+    response, hit = _cached_turn_call(call_client, cache, turn_map, system=system, user=user, model=model)
     if not hit:
         llm_calls += 1
 
-    all_records, repair_calls = _parse_with_one_repair(response, client=call_client, cache=cache, model=model)
+    all_records, repair_calls = _parse_with_one_repair(
+        response, client=call_client, cache=cache, model=model, turn_map=turn_map
+    )
     llm_calls += repair_calls
 
     running_transcript = response
     for _ in range(max_gleanings):
         glean_user = f"{user}\n\n---\nYour previous output:\n{running_transcript}\n\n{build_gleaning_prompt()}"
-        glean_response, glean_hit = read_through_complete(
-            call_client, cache, system=system, user=glean_user, model=model
+        glean_response, glean_hit = _cached_turn_call(
+            call_client, cache, turn_map, system=system, user=glean_user, model=model
         )
         if not glean_hit:
             llm_calls += 1
@@ -259,7 +296,7 @@ def extract_entities_relationships(
             break
 
         glean_records, glean_repair_calls = _parse_with_one_repair(
-            glean_response, client=call_client, cache=cache, model=model
+            glean_response, client=call_client, cache=cache, model=model, turn_map=turn_map
         )
         llm_calls += glean_repair_calls
         if not glean_records:
