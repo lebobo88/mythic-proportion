@@ -2,6 +2,40 @@
 
 All notable changes to Mythic Proportion are documented here. This file is organized by phase (newest first), tracking the greenfield rebuild from Phase 0 onward.
 
+## v0.7.0 — GraphRAG Extraction Critical Fixes (feat/3d-graphrag)
+
+### Security Issues
+
+**[CRITICAL] Defect #4: PII Cloud-Egress Leak in Repair/Gleaning Rounds**
+- A genuine PII vulnerability exists in the GraphRAG extraction pipeline's repair and gleaning rounds. Real names, emails, phone numbers, and other PII can be sent unmasked to cloud LLM providers during multi-round extraction.
+- **Who is affected by Defect #4**: Vaults with `redaction_enabled=true` (Phase 6 default) that ran extraction with repair or gleaning rounds enabled.
+- **Who should re-run extraction**: All Phase 3+ vaults that have ever run extraction. Defects #2 and #3 (data quality) affect all vaults; Defect #4 (PII leak) affects only those with `redaction_enabled=true`.
+- **Root cause**: Redaction/rehydration state was scoped per-LLM-call instead of per-extraction-turn, causing already-rehydrated PII to be re-embedded in repair/gleaning prompts.
+- **Fix**: Redaction map now scoped to entire extraction turn. Repair/gleaning prompts operate on redacted text throughout; only final records are rehydrated once after all rounds complete. No unredacted PII exits during a turn, and no `REDACTED_*` placeholder persists in final data.
+- **See**: Security advisory in docs/security/ for detailed mitigation, incident-response procedures, and provider data-retention guidance.
+
+### Bug Fixes
+
+**Defect #1: Extraction Command Unreachable** — `mythic index-graph` was orphaned (no UI, no watcher). Added three entry points: "Build Knowledge Graph" button in Ingest view, "Auto-build knowledge graph after ingest" toggle in Settings (OFF by default), and un-hid CLI command from `--help`.
+
+**Defect #2: Extraction Reads Lossy Wiki Pages Instead of Raw Sources** — `reindex_graph` used compressed `wiki/` pages instead of full `raw/` documents, yielding ~50× fewer text units. Now reads raw sources directly, recovering full document content for extraction.
+
+**Defect #3: Tuple Parser Corrupts ~89% of Entities** — LLM learned from inconsistent few-shot examples (prompt said `##` but showed `\n`). Rewrote prompts with explicit `##`-delimited examples, added parser defense-in-depth to handle both formats. Extracted descriptions now clean, no syntax leakage between records.
+
+### No Breaking Changes
+
+- Base install (no `privacy`, `embeddings`, `web`, or `graphrag` extras) unchanged.
+- All six CLI verbs (`init`, `ingest`, `query`, `lint`, `watch`, `serve`) unaffected.
+- Pytest baseline: 316 passing; Vitest: 103 passing; all new/modified tests maintain zero regressions.
+
+### API Changes
+
+**New endpoint**: `POST /api/index-graph` — Enqueue a GraphRAG extraction job (async, follows IngestWorker pattern).  
+**New endpoint**: `GET /api/index-graph/status` — Poll the current/most-recent graph-index job.  
+**Modified endpoint**: `POST /api/config` — New optional field `auto_build_graph: bool`.
+
+---
+
 ## Phase 2 — Core rebuild + data migration (c57e641)
 
 Seven React views rebuilt on the Phase 1 design system and served at `/app`. Legacy vanilla-JS SPA at `/` preserved for parity.
@@ -28,69 +62,3 @@ Seven React views rebuilt on the Phase 1 design system and served at `/app`. Leg
   - All 11 web routes (`/api/pages`, `/api/page`, `/api/search`, `/api/query`, `/api/graph`, `/api/ingest`, `/api/upload`, `/api/lint`, `/api/config`, `/api/models`) return the expected shape
   - Hybrid BM25+vector search ranking preserved
   - Lint rules (orphans, dangling links, thin pages, stale index) enforced identically
-- **FastAPI mount** — Phase 0 infrastructure (`web/app.py` mounts `/app` to `static_next/`) now serving the Phase 2 build; legacy vanilla-JS at `/` and `/static/*` remain untouched
-
-### No-op changes
-
-- The Python core remains unchanged and fully importable without optional extras (the parity floor).
-- Structured LLM output stays prompted strict-JSON; no tool-calling assumption.
-
----
-
-## Phase 1 — Design-system foundation (9162a12)
-
-OKLCH three-tier design tokens + Cmd+K palette + light/dark theming + shadcn/ui component primitives.
-
-### Design tokens
-
-- **Tier 1 — Primitives** (`web/src/styles/tokens/primitives.css`): OKLCH color scales (neutral, accent, danger, warning, success) + spacing 4px base + modular type scale + radius + elevation shadows
-- **Tier 2 — Semantic** (`web/src/styles/tokens/semantic.css`): `--color-*` (text primary/secondary/disabled, bg, border, accent), `--shadow-*`, dark-first + light overrides via `[data-theme="light"]`
-- **Tier 3 — Component** (`web/src/styles/tokens/components.css`): button sizes, input states, dialog layering, etc.
-- **Graph tokens** (`web/src/styles/tokens/graph.css`): `--graph-node-*` (source/entity/concept/session), `--graph-edge*`, `--graph-community-{1..8}` (categorical OKLCH ramp), `--graph-hull-fill`, `--graph-glow` — shared palette for 2D chrome and future Phase 5 3D scene via `THREE.Color` runtime read
-
-### Components
-
-- **Radix UI + shadcn/ui** (`web/src/components/ui/`) — headless, accessible, fully owned copies:
-  - `Button` — button, link, and icon-button variants
-  - `Input` — text, search, disabled states
-  - `Dialog` — modal with focus trap and backdrop
-  - `Tooltip` — popper-driven, keyboard-accessible
-  - `Combobox` — fuzzy search, keyboard nav, autocomplete
-- **Shell** (`web/src/components/shell/`) — `Header`, `TabNav`, `ThemeToggle`, `AppShell` layout wrapper
-- **Command Palette** (`web/src/components/command-palette/CommandPalette.tsx`) — Cmd+K combobox-driven nav, fuzzy page/tab search, single source of truth for top-level routing
-
-### Theming
-
-- Dark mode is the default; light mode toggled via `data-theme="light"` on `<html>` root
-- WCAG 4.5:1 contrast (body text) / 3:1 (large text + UI) audited in both themes (`src/styles/__tests__/contrast.test.ts`)
-- Real-time theme switching via `useTheme()` hook; CSS custom properties update on toggle, no page reload
-
-### Development
-
-- `npm run dev` → Vite dev server at `http://localhost:5173`, HMR enabled
-- `npm run build` → production build to `../src/mythic_proportion/web/static_next/`
-- `npm run test` → Vitest unit + component tests
-- TypeScript strict mode enabled (`web/tsconfig.json`)
-
----
-
-## Phase 0 — Dual-repo + greenfield scaffold (813b532)
-
-Python core unchanged. Greenfield `web/` Vite + React + R3F workspace scaffolded; `parity-checklist.md` frozen as Phase 2 acceptance contract.
-
-### Scaffold
-
-- `web/` — new Vite/React/TypeScript workspace alongside Python `src/mythic_proportion/`
-- `vite.config.ts` — base path `/app/`, outDir `../src/mythic_proportion/web/static_next/`
-- `package.json` — React 18, R3F, Radix UI (dependency layer)
-- `src/main.tsx`, `App.tsx` — React entry point (hash-router, tab-state, design preview at `#/design`)
-- `web/` build output mounted at `/app` in `web/app.py` only if the build directory exists; legacy SPA at `/` unaffected
-
-### Parity contract
-
-- `parity-checklist.md` — 123 items spanning all six CLI verbs, 11 web routes, 4 lint rules, ingest fast-path, hybrid search, and cross-cutting invariants (no-drift, lazy imports, strict-JSON, green tests). Phase 2 acceptance gate.
-
-### Python core
-
-- No structural changes; importable without optional extras; 102 tests green (baseline).
-- `web/app.py` guards `/app` mount: `if STATIC_NEXT_DIR.is_dir()` (no-op if build hasn't run).
