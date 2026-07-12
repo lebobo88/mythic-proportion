@@ -145,12 +145,26 @@ export interface ConfigResponse {
   authhub_base_url: string;
   route_alias: string | null;
   has_api_key: boolean;
+  // Phase 6 additions -- strictly additive/optional: the legacy shape above
+  // (returned by an older server build, or asserted verbatim by pre-Phase-6
+  // tests' mocked fetch responses) omits these entirely rather than sending
+  // them as `null`, so every reader must treat them as possibly `undefined`.
+  local?: boolean;
+  redaction_enabled?: boolean;
+  ollama_base_url?: string;
+  ollama_model?: string;
+  embeddings_backend?: string;
 }
 
 export interface ConfigUpdateRequest {
   provider?: string;
   model?: string;
   route_alias?: string | null;
+  // Phase 6 additions -- strictly additive/optional.
+  local?: boolean;
+  redaction_enabled?: boolean;
+  ollama_base_url?: string;
+  ollama_model?: string;
 }
 
 export interface ModelsResponse {

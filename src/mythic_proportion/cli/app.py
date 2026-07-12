@@ -27,7 +27,7 @@ module -- and the rest of the five-verb CLI -- stays importable without them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -132,6 +132,17 @@ def reindex(
     re-embedded/re-written; pages removed from disk are dropped from the
     index. A utility command (not one of the five headline verbs) that
     Phase 5's `query` relies on to keep retrieval fresh.
+
+    Phase 6 re-embed migration path: this same command is how an existing
+    vault picks up a new embedder (e.g. installing `[embeddings]` so
+    `embeddings_backend="auto"` starts resolving to the real local
+    `bge-small-en-v1.5` model instead of the zero-dependency `HashEmbedder`
+    fallback, or explicitly setting `MYTHIC_EMBEDDINGS_BACKEND=fastembed`).
+    `IndexStore` detects the embedder identity (`{ClassName}:{dim}`) changed
+    against what's stored in `meta.embedder_id` and automatically wipes and
+    rebuilds every vector from scratch on the next `reindex` -- no separate
+    migration tool is needed, and nothing but vectors is ever discarded
+    (page/FTS content is always re-derived from `wiki/` on disk).
     """
     root = Path(vault_path) if vault_path is not None else Path.cwd()
     settings = load_settings(root)
@@ -170,23 +181,56 @@ def index_graph(
     settings = load_settings(root)
     embedder = get_embedder(settings)
 
-    api_key = authhub_api_key()
-    if not api_key:
-        console.print(
-            "[red]index-graph requires AUTHHUB_API_KEY to be set (or MYTHIC_LLM_PROVIDER=anthropic "
-            "support, not yet wired for extraction).[/red]"
-        )
-        raise typer.Exit(code=1)
-
-    from mythic_proportion.graph.extract import AuthHubExtractionClient, ExtractionError
+    from mythic_proportion.graph.extract import ExtractionError
     from mythic_proportion.graph.index import reindex_graph
 
-    client = AuthHubExtractionClient(
-        base_url=authhub_base_url(settings),
-        api_key=api_key,
-        model=settings.llm_model,
-        route_alias=settings.route_alias,
+    # Phase 6: `local: true` (or explicit `llm_provider="ollama"`) routes
+    # graph extraction entirely through Ollama, never AuthHub -- same
+    # per-vault "never touch the cloud" guarantee as compile/query (see
+    # `query.engine._default_extraction_client`).
+    if settings.local or settings.llm_provider == "ollama":
+        from mythic_proportion.llm.ollama import OllamaConfigError, OllamaExtractionClient, require_loopback_url
+
+        if settings.local:
+            try:
+                require_loopback_url(settings.ollama_base_url, context="local mode (settings.local=True)")
+            except OllamaConfigError as exc:
+                console.print(f"[red]{exc}[/red]")
+                raise typer.Exit(code=1) from exc
+
+        client: Any = OllamaExtractionClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+    else:
+        api_key = authhub_api_key()
+        if not api_key:
+            console.print(
+                "[red]index-graph requires AUTHHUB_API_KEY to be set (or MYTHIC_LLM_PROVIDER=anthropic "
+                "support, not yet wired for extraction; or MYTHIC_LOCAL=true / MYTHIC_LLM_PROVIDER=ollama "
+                "for a fully-local run).[/red]"
+            )
+            raise typer.Exit(code=1)
+
+        from mythic_proportion.graph.extract import AuthHubExtractionClient
+
+        client = AuthHubExtractionClient(
+            base_url=authhub_base_url(settings),
+            api_key=api_key,
+            model=settings.llm_model,
+            route_alias=settings.route_alias,
+        )
+
+    from mythic_proportion.privacy.redact import (
+        RedactingExtractionClient,
+        RedactionUnavailableError,
+        get_redactor,
     )
+
+    try:
+        redactor = get_redactor(settings)
+    except RedactionUnavailableError as exc:
+        console.print(f"[red]Redaction is enabled but unavailable: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if redactor is not None:
+        client = RedactingExtractionClient(client, redactor)
 
     with IndexStore(root, embedder) as store:
         store.reindex(root)

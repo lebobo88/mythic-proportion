@@ -39,3 +39,27 @@
 .mp-settings-ok {
   color: var(--color-success);
 }
+
+.mp-settings-warning {
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: 0;
+}
+
+.mp-settings-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: var(--space-2) 0;
+}
+
+.mp-settings-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 500;
+}
+
+.mp-settings-ollama {
+  gap: var(--space-2);
+}

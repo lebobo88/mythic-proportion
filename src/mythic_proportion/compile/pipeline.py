@@ -143,13 +143,56 @@ class CompiledLedger:
             self.save()
 
 
+def _maybe_redact(client: CompileClient, settings: Settings) -> CompileClient:
+    """Wrap ``client`` in :class:`~mythic_proportion.privacy.redact.RedactingCompileClient`
+    when redaction is enabled and available; returns ``client`` unchanged
+    only when redaction is explicitly disabled. Mirrors ``query.engine._maybe_redact``.
+
+    **Fail-closed**: if redaction is enabled but unavailable (the
+    ``[privacy]`` extra isn't installed), this raises :class:`CompileError`
+    rather than silently returning the unwrapped ``client`` -- no compile
+    call is made with potentially-unredacted content in that case.
+    """
+    from mythic_proportion.privacy.redact import RedactingCompileClient, RedactionUnavailableError, get_redactor
+
+    try:
+        redactor = get_redactor(settings)
+    except RedactionUnavailableError as exc:
+        raise CompileError(f"Redaction is enabled but unavailable: {exc}") from exc
+    if redactor is None:
+        return client
+    return RedactingCompileClient(client, redactor)  # type: ignore[return-value]
+
+
 def _default_client(settings: Settings) -> CompileClient:
     """Build the client for ``settings.llm_provider``.
 
     Raises :class:`CompileError` with an actionable message if the required
     credential is missing -- a working LLM is required for compile as of the
     AuthHub migration; there is no longer a "return None -> degrade" path.
+
+    Phase 6: ``settings.local`` (or explicit ``llm_provider="ollama"``)
+    unconditionally routes to :class:`~mythic_proportion.llm.ollama.OllamaCompileClient`
+    -- the per-vault "never touch the cloud" guarantee, same as
+    ``query.engine._default_client``. ``settings.ollama_base_url`` must be
+    loopback-only: ``OllamaCompileClient``'s own constructor
+    (``llm.ollama._OllamaBase.__init__``) enforces this unconditionally for
+    every Ollama client it builds, so a non-loopback URL under either
+    ``local: true`` or an explicit ``llm_provider="ollama"`` is converted to
+    :class:`CompileError` here rather than propagating as a raw
+    ``OllamaConfigError``. Every real client built here is wrapped with
+    :func:`_maybe_redact` before being returned.
     """
+    if settings.local or settings.llm_provider == "ollama":
+        from mythic_proportion.llm.ollama import OllamaCompileClient, OllamaConfigError
+
+        try:
+            ollama_client = OllamaCompileClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+        except OllamaConfigError as exc:
+            raise CompileError(str(exc)) from exc
+
+        return _maybe_redact(ollama_client, settings)
+
     if settings.llm_provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
@@ -157,7 +200,7 @@ def _default_client(settings: Settings) -> CompileClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
-        return AnthropicCompileClient(model=settings.model, api_key=api_key)
+        return _maybe_redact(AnthropicCompileClient(model=settings.model, api_key=api_key), settings)
 
     if settings.llm_provider == "authhub":
         api_key = authhub_api_key()
@@ -168,11 +211,14 @@ def _default_client(settings: Settings) -> CompileClient:
             )
         from mythic_proportion.llm.authhub import AuthHubCompileClient
 
-        return AuthHubCompileClient(
-            base_url=base_url,
-            api_key=api_key,
-            model=settings.llm_model,
-            route_alias=settings.route_alias or None,
+        return _maybe_redact(
+            AuthHubCompileClient(
+                base_url=base_url,
+                api_key=api_key,
+                model=settings.llm_model,
+                route_alias=settings.route_alias or None,
+            ),
+            settings,
         )
 
     raise CompileError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")

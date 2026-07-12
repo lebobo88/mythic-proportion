@@ -102,13 +102,25 @@ def get_embedder(settings: Settings) -> Embedder | None:
     * ``"fastembed"`` -> :class:`FastEmbedEmbedder`, falling back to
       :class:`HashEmbedder` if the optional dependency isn't installed (the
       index must never hard-fail for lack of an optional extra).
-    * anything else (including the ``"local"`` default) -> :class:`HashEmbedder`,
-      today's zero-dependency local backend.
+    * ``"auto"`` (the Phase 6 default) -> the same fastembed-or-fallback
+      resolution as ``"fastembed"``. This is what "flip the default
+      embedder to a local model" (``bge-small-en-v1.5``) means in practice:
+      when the optional ``[embeddings]`` extra is installed, every *new*
+      vault (and every vault whose stored ``embedder_id`` doesn't match --
+      see :class:`~mythic_proportion.index.store.IndexStore`'s
+      auto-wipe-and-rebuild-on-mismatch behavior, the re-embed migration
+      path) gets the real local model; when it isn't, behavior is byte-for-byte
+      identical to the pre-Phase-6 ``"local"`` default.
+    * explicit ``"local"`` -> always :class:`HashEmbedder`, unconditionally
+      (unchanged pre-Phase-6 behavior -- explicit ``"local"`` never resolves
+      to fastembed, even if it's installed).
+    * anything else -> :class:`HashEmbedder`, today's zero-dependency local
+      backend.
     """
     backend = settings.embeddings_backend
     if backend in ("none", "off", "disabled"):
         return None
-    if backend == "fastembed":
+    if backend in ("fastembed", "auto"):
         try:
             return FastEmbedEmbedder()
         except RuntimeError:

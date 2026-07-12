@@ -37,8 +37,10 @@ STATIC_DIR = Path(__file__).with_name("static")
 #: ``/`` is untouched (parity requirement, see specs/parity-checklist.md).
 STATIC_NEXT_DIR = Path(__file__).with_name("static_next")
 
-#: Providers ``POST /api/config`` will accept for ``llm_provider``.
-_VALID_PROVIDERS = {"authhub", "anthropic"}
+#: Providers ``POST /api/config`` will accept for ``llm_provider``. Phase 6
+#: adds ``"ollama"`` (a fully-local model via a local Ollama daemon -- see
+#: :mod:`mythic_proportion.llm.ollama`).
+_VALID_PROVIDERS = {"authhub", "anthropic", "ollama"}
 
 #: AuthHub's "list models" endpoint (sibling of the chat-completions path used
 #: by :mod:`mythic_proportion.llm.authhub`).
@@ -74,6 +76,13 @@ class ConfigUpdateRequest(BaseModel):
     model: str | None = None
     provider: str | None = None
     route_alias: str | None = None
+    #: Phase 6 additions -- all strictly additive/optional; omitting them
+    #: leaves the corresponding setting untouched, exactly like the
+    #: pre-existing fields above.
+    local: bool | None = None
+    redaction_enabled: bool | None = None
+    ollama_base_url: str | None = None
+    ollama_model: str | None = None
 
 
 def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
@@ -398,14 +407,28 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
         current_settings = app.state.settings
+        # Phase 6: `local: true` routes everything through Ollama and never
+        # touches the cloud -- `has_api_key` reflects that (Ollama needs no
+        # API key at all; it's a reachability question, not a credential
+        # one, so we simply omit any cloud-key claim in that case).
+        if current_settings.local or current_settings.llm_provider == "ollama":
+            has_api_key = True
+        elif current_settings.llm_provider == "authhub":
+            has_api_key = bool(authhub_api_key())
+        else:
+            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
         return {
             "provider": current_settings.llm_provider,
             "model": current_settings.llm_model,
             "authhub_base_url": authhub_base_url(current_settings),
             "route_alias": current_settings.route_alias,
-            "has_api_key": bool(authhub_api_key())
-            if current_settings.llm_provider == "authhub"
-            else bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "has_api_key": has_api_key,
+            # Phase 6 additions -- strictly additive.
+            "local": current_settings.local,
+            "redaction_enabled": current_settings.redaction_enabled,
+            "ollama_base_url": current_settings.ollama_base_url,
+            "ollama_model": current_settings.ollama_model,
+            "embeddings_backend": current_settings.embeddings_backend,
         }
 
     @app.post("/api/config")
@@ -428,6 +451,41 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
 
         if req.route_alias is not None:
             update["route_alias"] = req.route_alias or None
+
+        if req.local is not None:
+            update["local"] = req.local
+
+        if req.redaction_enabled is not None:
+            update["redaction_enabled"] = req.redaction_enabled
+
+        if req.ollama_base_url is not None:
+            if not req.ollama_base_url.strip():
+                raise HTTPException(status_code=422, detail="ollama_base_url must be a non-empty string")
+            update["ollama_base_url"] = req.ollama_base_url
+
+        if req.ollama_model is not None:
+            if not req.ollama_model.strip():
+                raise HTTPException(status_code=422, detail="ollama_model must be a non-empty string")
+            update["ollama_model"] = req.ollama_model
+
+        # Phase 6 fix (closes a prior review finding): `local: true` with a
+        # non-loopback `ollama_base_url` would egress prompts off-host. Validate
+        # the *effective* post-update state -- whether `local` or
+        # `ollama_base_url` (or neither, i.e. an already-local vault) is the
+        # field actually being changed in this request -- and reject rather
+        # than silently accepting a remote URL. This is the config-set-time
+        # half of the enforcement; `compile.pipeline`/`query.engine`'s
+        # `_default_client` factories enforce the same rule again at
+        # client-construction time.
+        effective_local = update.get("local", current_settings.local)
+        effective_ollama_base_url = update.get("ollama_base_url", current_settings.ollama_base_url)
+        if effective_local:
+            from mythic_proportion.llm.ollama import OllamaConfigError, require_loopback_url
+
+            try:
+                require_loopback_url(effective_ollama_base_url, context="POST /api/config (local=True)")
+            except OllamaConfigError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if update:
             app.state.settings = current_settings.model_copy(update=update)

@@ -92,6 +92,27 @@ class QueryAnswer:
     resolved_mode: str | None = None
 
 
+def _maybe_redact(client: AnswerClient, settings: Settings) -> AnswerClient:
+    """Wrap ``client`` in :class:`~mythic_proportion.privacy.redact.RedactingAnswerClient`
+    when redaction is enabled and available (see
+    :func:`mythic_proportion.privacy.redact.get_redactor`); returns ``client``
+    unchanged only when redaction is explicitly disabled.
+
+    **Fail-closed**: if redaction is enabled but unavailable, raises
+    :class:`AnswerError` rather than silently returning the unwrapped
+    ``client`` -- no answer call is made with potentially-unredacted content.
+    """
+    from mythic_proportion.privacy.redact import RedactingAnswerClient, RedactionUnavailableError, get_redactor
+
+    try:
+        redactor = get_redactor(settings)
+    except RedactionUnavailableError as exc:
+        raise AnswerError(f"Redaction is enabled but unavailable: {exc}") from exc
+    if redactor is None:
+        return client
+    return RedactingAnswerClient(client, redactor)  # type: ignore[return-value]
+
+
 def _default_client(settings: Settings) -> AnswerClient:
     """Build the client for ``settings.llm_provider``.
 
@@ -99,7 +120,29 @@ def _default_client(settings: Settings) -> AnswerClient:
     credential is missing -- a working LLM is required for query synthesis as
     of the AuthHub migration; there is no longer a "return None -> degrade"
     path.
+
+    Phase 6: ``settings.local`` is checked *first* and, when ``True``,
+    unconditionally routes to :class:`~mythic_proportion.llm.ollama.OllamaAnswerClient`
+    regardless of ``settings.llm_provider`` -- the per-vault "never touch the
+    cloud" guarantee. Explicit ``llm_provider="ollama"`` (with ``local`` left
+    ``False``) does the same thing opt-in-per-provider rather than
+    vault-wide. ``settings.ollama_base_url`` must be loopback-only:
+    ``OllamaAnswerClient``'s own constructor enforces this unconditionally
+    (``llm.ollama._OllamaBase.__init__``), so a non-loopback URL is converted
+    to :class:`AnswerError` here rather than propagating as a raw
+    ``OllamaConfigError``. Every real client built here is wrapped with
+    :func:`_maybe_redact` before being returned.
     """
+    if settings.local or settings.llm_provider == "ollama":
+        from mythic_proportion.llm.ollama import OllamaAnswerClient, OllamaConfigError
+
+        try:
+            ollama_client = OllamaAnswerClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+        except OllamaConfigError as exc:
+            raise AnswerError(str(exc)) from exc
+
+        return _maybe_redact(ollama_client, settings)
+
     if settings.llm_provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
@@ -107,7 +150,7 @@ def _default_client(settings: Settings) -> AnswerClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
-        return AnthropicAnswerClient(model=settings.model, api_key=api_key)
+        return _maybe_redact(AnthropicAnswerClient(model=settings.model, api_key=api_key), settings)
 
     if settings.llm_provider == "authhub":
         api_key = authhub_api_key()
@@ -118,14 +161,36 @@ def _default_client(settings: Settings) -> AnswerClient:
             )
         from mythic_proportion.llm.authhub import AuthHubAnswerClient
 
-        return AuthHubAnswerClient(
-            base_url=base_url,
-            api_key=api_key,
-            model=settings.llm_model,
-            route_alias=settings.route_alias or None,
+        return _maybe_redact(
+            AuthHubAnswerClient(
+                base_url=base_url,
+                api_key=api_key,
+                model=settings.llm_model,
+                route_alias=settings.route_alias or None,
+            ),
+            settings,
         )
 
     raise AnswerError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")
+
+
+def _maybe_redact_extraction(client: ExtractionClient, settings: Settings) -> ExtractionClient:
+    """:func:`_maybe_redact`'s counterpart for :class:`ExtractionClient`.
+
+    **Fail-closed**: raises :class:`AnswerError` (matching this module's
+    other extraction-path error type -- see :func:`_default_extraction_client`)
+    if redaction is enabled but unavailable, rather than silently returning
+    the unwrapped ``client``.
+    """
+    from mythic_proportion.privacy.redact import RedactingExtractionClient, RedactionUnavailableError, get_redactor
+
+    try:
+        redactor = get_redactor(settings)
+    except RedactionUnavailableError as exc:
+        raise AnswerError(f"Redaction is enabled but unavailable: {exc}") from exc
+    if redactor is None:
+        return client
+    return RedactingExtractionClient(client, redactor)  # type: ignore[return-value]
 
 
 def _default_extraction_client(settings: Settings) -> ExtractionClient:
@@ -133,7 +198,23 @@ def _default_extraction_client(settings: Settings) -> ExtractionClient:
     synthesis routes through (see ``query.modes``'s module docstring for why
     this is a *different* client shape than :func:`_default_client`'s
     tool-calling :class:`AnswerClient`). Raises :class:`AnswerError` with the
-    same actionable-credential-message shape as :func:`_default_client`."""
+    same actionable-credential-message shape as :func:`_default_client`.
+
+    Phase 6: ``settings.local`` (or explicit ``llm_provider="ollama"``) routes
+    to :class:`~mythic_proportion.llm.ollama.OllamaExtractionClient`, same as
+    :func:`_default_client`. ``settings.ollama_base_url`` must be
+    loopback-only, enforced by the client's own constructor and converted to
+    :class:`AnswerError` here (see :func:`_default_client`'s docstring)."""
+    if settings.local or settings.llm_provider == "ollama":
+        from mythic_proportion.llm.ollama import OllamaConfigError, OllamaExtractionClient
+
+        try:
+            ollama_client = OllamaExtractionClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+        except OllamaConfigError as exc:
+            raise AnswerError(str(exc)) from exc
+
+        return _maybe_redact_extraction(ollama_client, settings)
+
     api_key = authhub_api_key()
     if not api_key:
         raise AnswerError(
@@ -142,11 +223,14 @@ def _default_extraction_client(settings: Settings) -> ExtractionClient:
         )
     from mythic_proportion.graph.extract import AuthHubExtractionClient
 
-    return AuthHubExtractionClient(
-        base_url=authhub_base_url(settings),
-        api_key=api_key,
-        model=settings.llm_model,
-        route_alias=settings.route_alias or None,
+    return _maybe_redact_extraction(
+        AuthHubExtractionClient(
+            base_url=authhub_base_url(settings),
+            api_key=api_key,
+            model=settings.llm_model,
+            route_alias=settings.route_alias or None,
+        ),
+        settings,
     )
 
 
