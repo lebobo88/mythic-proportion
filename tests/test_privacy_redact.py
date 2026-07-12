@@ -124,6 +124,70 @@ def test_rehydrate_leaves_unknown_tokens_untouched() -> None:
 
 
 # --------------------------------------------------------------------------
+# Redactor.rehydrate -- permissive fallback for real-world LLM token
+# mangling (dropped brackets / underscore-to-space / fused-adjacent-text).
+# --------------------------------------------------------------------------
+
+
+def test_rehydrate_permissive_bracket_dropped() -> None:
+    text = "Seen near REDACTED_LOCATION_1 last week."
+    result = Redactor.rehydrate(text, {"[REDACTED_LOCATION_1]": "Paris"})
+    assert result == "Seen near Paris last week."
+
+
+def test_rehydrate_permissive_underscore_to_space() -> None:
+    text = "Timestamp: REDACTED DATE TIME 1 recorded."
+    result = Redactor.rehydrate(text, {"[REDACTED_DATE_TIME_1]": "2024-01-01T00:00:00Z"})
+    assert result == "Timestamp: 2024-01-01T00:00:00Z recorded."
+
+
+def test_rehydrate_permissive_underscore_to_space_multiword_type() -> None:
+    text = "License on file: REDACTED US DRIVER LICENSE 1 expired."
+    result = Redactor.rehydrate(
+        text, {"[REDACTED_US_DRIVER_LICENSE_1]": "D1234567"}
+    )
+    assert result == "License on file: D1234567 expired."
+
+
+def test_rehydrate_permissive_fused_adjacent_text() -> None:
+    text = "REDACTED_LOCATION_1-GS: Sparse-Controlled Gaussian Splatting"
+    result = Redactor.rehydrate(text, {"[REDACTED_LOCATION_1]": "NeRF"})
+    assert result == "NeRF-GS: Sparse-Controlled Gaussian Splatting"
+
+
+def test_rehydrate_exact_bracketed_match_still_works() -> None:
+    text = "Contact [REDACTED_PERSON_1] at [REDACTED_EMAIL_ADDRESS_1]."
+    result = Redactor.rehydrate(
+        text,
+        {
+            "[REDACTED_PERSON_1]": "John Smith",
+            "[REDACTED_EMAIL_ADDRESS_1]": "john.smith@example.com",
+        },
+    )
+    assert result == "Contact John Smith at john.smith@example.com."
+
+
+def test_rehydrate_still_fails_open_on_genuinely_unmatchable_token() -> None:
+    text = "This references REDACTEDLOCATIONONE with no clean separator at all."
+    result = Redactor.rehydrate(text, {"[REDACTED_LOCATION_1]": "Paris"})
+    assert result == text
+
+
+def test_rehydrate_permissive_no_cross_contamination_between_entries() -> None:
+    # One entry echoed exactly-bracketed, the other with brackets dropped --
+    # confirm each entry only touches its own span.
+    text = "[REDACTED_PERSON_1] emailed REDACTED_EMAIL_ADDRESS_1 yesterday."
+    result = Redactor.rehydrate(
+        text,
+        {
+            "[REDACTED_PERSON_1]": "John Smith",
+            "[REDACTED_EMAIL_ADDRESS_1]": "john.smith@example.com",
+        },
+    )
+    assert result == "John Smith emailed john.smith@example.com yesterday."
+
+
+# --------------------------------------------------------------------------
 # RedactingAnswerClient -- the full redact -> LLM -> rehydrate call path
 # --------------------------------------------------------------------------
 

@@ -522,12 +522,56 @@ class Redactor:
         """Reverse :meth:`redact`: replace every ``[REDACTED_...]`` token in
         ``text`` with its original value. Tokens with no entry in
         ``rehydrate_map`` (e.g. the model echoed a token from a different
-        call) are left as-is rather than raising."""
+        call) are left as-is rather than raising.
+
+        Real LLMs frequently fail to echo the exact bracketed token
+        (``[REDACTED_<TYPE>_<n>]``) byte-for-byte when copying it into a
+        short structured field, e.g. an extracted entity name -- they
+        commonly (a) drop the surrounding brackets, (b) turn the
+        underscores inside ``<TYPE>`` into spaces, and/or (c) fuse the
+        token directly against adjacent text with no separator. To stay
+        robust to all three without over-matching, this does two passes
+        per token: an exact literal fast-path first (cheap, and the only
+        thing well-behaved output needs), then -- only for tokens the
+        exact pass didn't find -- a permissive regex pass that tolerates
+        missing brackets and underscore/space equivalence within
+        ``<TYPE>`` while still matching only the token's own span (never
+        consuming adjacent, unrelated characters)."""
         if not rehydrate_map:
             return text
         result = text
+
+        # Exact fast-path: literal bracketed token, byte-for-byte.
+        remaining: dict[str, str] = {}
         for token, original in rehydrate_map.items():
-            result = result.replace(token, original)
+            if token in result:
+                result = result.replace(token, original)
+            else:
+                remaining[token] = original
+        if not remaining:
+            return result
+
+        # Permissive fallback pass, for tokens the exact pass missed.
+        # Sort by descending token length so a longer/more-specific token
+        # (e.g. "[REDACTED_US_DRIVER_LICENSE_1]") can't be partially
+        # shadowed by a shorter one sharing a prefix before it gets a
+        # chance to match its own full span.
+        _TOKEN_RE = re.compile(r"^\[?REDACTED_(?P<type>[A-Z0-9_]+)_(?P<index>\d+)\]?$")
+        for token in sorted(remaining, key=len, reverse=True):
+            original = remaining[token]
+            match = _TOKEN_RE.match(token)
+            if not match:
+                # Not a well-formed token to begin with -- nothing to
+                # permissively match against; leave text untouched for it.
+                continue
+            entity_type, index = match.group("type"), match.group("index")
+            # Within the type, underscores may have become one-or-more
+            # whitespace characters; brackets are optional.
+            type_pattern = r"[ _]+".join(re.escape(part) for part in entity_type.split("_"))
+            pattern = re.compile(
+                r"\[?REDACTED[ _]+" + type_pattern + r"[ _]+" + re.escape(index) + r"\]?"
+            )
+            result = pattern.sub(lambda _m, _original=original: _original, result, count=1)
         return result
 
 
