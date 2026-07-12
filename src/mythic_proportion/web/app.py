@@ -477,13 +477,34 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         # half of the enforcement; `compile.pipeline`/`query.engine`'s
         # `_default_client` factories enforce the same rule again at
         # client-construction time.
+        #
+        # Retry fix (closes a second prior review finding): the original
+        # check only fired when `effective_local` was true, so
+        # `provider="ollama", local=False` could persist a non-loopback
+        # `ollama_base_url` via this endpoint -- e.g. an admin sets
+        # `provider=ollama` first and `ollama_base_url` in a later request
+        # with `local` never touched (still `False`). The construction-time
+        # guard in `compile.pipeline`/`query.engine`'s `_default_client`
+        # still refused to actually egress in that case (both branches route
+        # through Ollama whenever `local or llm_provider == "ollama"`), so
+        # this was never a real network bypass -- but it left a stale,
+        # invalid `ollama_base_url` sitting in config, which is itself the
+        # invariant this config-time check exists to close. Now validated
+        # whenever *either* `local` or `llm_provider` resolves to routing
+        # through Ollama.
         effective_local = update.get("local", current_settings.local)
+        effective_provider = update.get("llm_provider", current_settings.llm_provider)
         effective_ollama_base_url = update.get("ollama_base_url", current_settings.ollama_base_url)
-        if effective_local:
+        if effective_local or effective_provider == "ollama":
             from mythic_proportion.llm.ollama import OllamaConfigError, require_loopback_url
 
+            context = (
+                "POST /api/config (local=True)"
+                if effective_local
+                else "POST /api/config (provider=ollama)"
+            )
             try:
-                require_loopback_url(effective_ollama_base_url, context="POST /api/config (local=True)")
+                require_loopback_url(effective_ollama_base_url, context=context)
             except OllamaConfigError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 

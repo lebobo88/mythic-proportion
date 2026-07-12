@@ -29,6 +29,8 @@ from mythic_proportion.compile.models import CompileResult, WikiPage  # noqa: E4
 from mythic_proportion.compile.prompt import CompilePrompt  # noqa: E402
 from mythic_proportion.config import Settings  # noqa: E402
 from mythic_proportion.privacy.redact import (  # noqa: E402
+    OPENAI_FILTER_ENTITIES,
+    OpenAIPrivacyFilterRecognizer,
     PiiSpan,
     Redactor,
     RedactingAnswerClient,
@@ -246,16 +248,31 @@ def test_is_privacy_extra_installed_reflects_presidio_availability() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_compile_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, monkeypatch) -> None:
-    """`compile_source`'s `_default_client` must refuse to call any LLM
-    provider -- never silently pass raw content through -- when redaction is
-    enabled but the [privacy] extra is unavailable."""
+def test_compile_default_client_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, monkeypatch) -> None:
+    """`compile_source`'s `_default_client` selection path must refuse to
+    call any LLM provider -- never silently pass raw content through -- when
+    redaction is enabled but the [privacy] extra is unavailable. Retry note:
+    the fail-closed check itself now lives in `compile_source` (applied
+    uniformly to whichever client is active -- default-built or injected,
+    see the injected-client test below), so this exercises the public
+    `compile_source` entry point rather than the internal `_default_client`
+    factory directly -- `_default_client` itself no longer performs this
+    check (that responsibility moved to the caller specifically so an
+    injected client can't bypass it)."""
     from mythic_proportion.compile.models import CompileError
-    from mythic_proportion.compile.pipeline import _default_client
+    from mythic_proportion.compile.pipeline import compile_source
+    from mythic_proportion.ingest.pipeline import ingest_drop
+    from mythic_proportion.vault.init import init_vault
 
     monkeypatch.setattr("mythic_proportion.privacy.redact.is_privacy_extra_installed", lambda: False)
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    (vault / "drop" / "note.md").parent.mkdir(parents=True, exist_ok=True)
+    (vault / "drop" / "note.md").write_text("# note\n\nSome content.\n", encoding="utf-8")
+    source = ingest_drop(vault).ingested[0]
+
     settings = Settings(
-        vault_path=tmp_path,
+        vault_path=vault,
         redaction_enabled=True,
         llm_provider="anthropic",
         model="claude-x",
@@ -263,16 +280,30 @@ def test_compile_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, m
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-never-actually-used")
 
     with pytest.raises(CompileError, match="[Rr]edaction"):
-        _default_client(settings)
+        compile_source(vault, source, settings=settings)
 
 
-def test_answer_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, monkeypatch) -> None:
+def test_answer_default_client_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, monkeypatch) -> None:
+    """Counterpart of the above for `answer_query`'s legacy (non-GraphRAG)
+    path -- see that test's docstring for why this goes through the public
+    entry point rather than the internal `_default_client` factory."""
+    from mythic_proportion.compile.models import WikiPage
+    from mythic_proportion.compile.writer import write_page
+    from mythic_proportion.index.embeddings import HashEmbedder
+    from mythic_proportion.index.store import IndexStore
     from mythic_proportion.query.client import AnswerError
-    from mythic_proportion.query.engine import _default_client as _default_answer_client
+    from mythic_proportion.query.engine import answer_query
+    from mythic_proportion.vault.init import init_vault
 
     monkeypatch.setattr("mythic_proportion.privacy.redact.is_privacy_extra_installed", lambda: False)
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    write_page(vault, WikiPage.new(page_type="concept", title="Topic", body="Some body text."))
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+
     settings = Settings(
-        vault_path=tmp_path,
+        vault_path=vault,
         redaction_enabled=True,
         llm_provider="anthropic",
         model="claude-x",
@@ -280,7 +311,123 @@ def test_answer_fails_closed_when_redaction_enabled_but_unavailable(tmp_path, mo
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-never-actually-used")
 
     with pytest.raises(AnswerError, match="[Rr]edaction"):
-        _default_answer_client(settings)
+        answer_query(vault, "anything at all", settings=settings)
+
+
+# --------------------------------------------------------------------------
+# Retry fix: an injected `client=`/`graph_client=` must never bypass the
+# fail-closed redaction guard just because it wasn't built by
+# `_default_client`/`_default_extraction_client` -- closes a cross-vendor
+# review finding that flagged exactly this as the "unredacted content never
+# leaves the process" invariant not actually being universal.
+# --------------------------------------------------------------------------
+
+
+def test_compile_source_injected_client_still_fails_closed_when_redaction_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    from mythic_proportion.compile.models import CompileError
+    from mythic_proportion.compile.pipeline import compile_source
+    from mythic_proportion.ingest.pipeline import ingest_drop
+    from mythic_proportion.vault.init import init_vault
+
+    monkeypatch.setattr("mythic_proportion.privacy.redact.is_privacy_extra_installed", lambda: False)
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    (vault / "drop" / "note.md").parent.mkdir(parents=True, exist_ok=True)
+    (vault / "drop" / "note.md").write_text("# note\n\nSome content.\n", encoding="utf-8")
+    source = ingest_drop(vault).ingested[0]
+
+    class _RealishCloudClient:
+        """Stands in for a real, directly-injected cloud client (as a
+        caller other than the test-double `FakeCompileClient` might pass)
+        -- must never actually be called."""
+
+        def __init__(self) -> None:
+            self.called = False
+
+        def compile(self, prompt):  # noqa: ANN001
+            self.called = True
+            raise AssertionError("must never be called -- fail-closed must raise before this")
+
+    client = _RealishCloudClient()
+    settings = Settings(vault_path=vault, redaction_enabled=True)  # the default anyway
+
+    with pytest.raises(CompileError, match="[Rr]edaction"):
+        compile_source(vault, source, client=client, settings=settings)
+
+    assert client.called is False
+
+
+def test_answer_query_injected_client_still_fails_closed_when_redaction_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    from mythic_proportion.compile.models import WikiPage
+    from mythic_proportion.compile.writer import write_page
+    from mythic_proportion.index.embeddings import HashEmbedder
+    from mythic_proportion.index.store import IndexStore
+    from mythic_proportion.query.client import AnswerError
+    from mythic_proportion.query.engine import answer_query
+    from mythic_proportion.vault.init import init_vault
+
+    monkeypatch.setattr("mythic_proportion.privacy.redact.is_privacy_extra_installed", lambda: False)
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    write_page(vault, WikiPage.new(page_type="concept", title="Topic", body="Some body text."))
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+
+    class _RealishCloudClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def answer(self, prompt):  # noqa: ANN001
+            self.called = True
+            raise AssertionError("must never be called -- fail-closed must raise before this")
+
+    client = _RealishCloudClient()
+    settings = Settings(vault_path=vault, redaction_enabled=True)
+
+    with pytest.raises(AnswerError, match="[Rr]edaction"):
+        answer_query(vault, "anything at all", client=client, settings=settings)
+
+    assert client.called is False
+
+
+def test_answer_query_graph_mode_injected_graph_client_still_fails_closed(tmp_path, monkeypatch) -> None:
+    """Same guarantee for the GraphRAG (`mode=`) path's `graph_client=`
+    override -- closes the third bypass the reviewer specifically named
+    (``query/engine.py:331-333``)."""
+    from mythic_proportion.compile.models import WikiPage
+    from mythic_proportion.compile.writer import write_page
+    from mythic_proportion.index.embeddings import HashEmbedder
+    from mythic_proportion.index.store import IndexStore
+    from mythic_proportion.query.client import AnswerError
+    from mythic_proportion.query.engine import answer_query
+    from mythic_proportion.vault.init import init_vault
+
+    monkeypatch.setattr("mythic_proportion.privacy.redact.is_privacy_extra_installed", lambda: False)
+    vault = tmp_path / "vault"
+    init_vault(vault)
+    write_page(vault, WikiPage.new(page_type="concept", title="Topic", body="Some body text."))
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+
+    class _RealishExtractionClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def complete(self, *, system: str, user: str) -> str:
+            self.called = True
+            raise AssertionError("must never be called -- fail-closed must raise before this")
+
+    graph_client = _RealishExtractionClient()
+    settings = Settings(vault_path=vault, redaction_enabled=True)
+
+    with pytest.raises(AnswerError, match="[Rr]edaction"):
+        answer_query(vault, "anything at all", mode="local", graph_client=graph_client, settings=settings)
+
+    assert graph_client.called is False
 
 
 def test_redaction_off_is_the_only_way_to_get_pass_through(tmp_path, monkeypatch) -> None:
@@ -330,3 +477,66 @@ def test_secret_scan_recognizer_is_registered_by_default_in_a_real_analyzer() ->
     redacted_text, rehydrate_map = redactor.redact(text)
     assert "sk-abcdEFGH12345678901234" not in redacted_text
     assert any(v == "sk-abcdEFGH12345678901234" for v in rehydrate_map.values())
+
+
+def test_default_redactor_degrades_gracefully_without_privacy_full(monkeypatch) -> None:
+    """Retry fix: closes the finding that ``[privacy]`` without
+    ``[privacy-full]`` (torch/transformers) was "likely nonfunctional and
+    untested." ``torch``/``transformers`` genuinely ARE installed in this
+    dev environment (the ``[privacy-full]`` extra), so this test simulates
+    their absence via ``sys.modules`` import-blocking (the standard "import
+    of X halted; None in sys.modules" technique) rather than relying on the
+    dev environment's actual package set.
+
+    Exercises the **real**, non-fake ``Redactor()`` -- default
+    ``enable_openai_filter=True``, real ``AnalyzerEngine`` -- and asserts
+    the *first* ``redact()`` call does not crash (closing the "load()
+    raises straight out of Presidio's uncaught analyze() loop" defect) and
+    that Presidio's own built-ins + :class:`SecretScanRecognizer` still
+    catch real PII/secrets for real, confirming the fallback described in
+    this module's docstring is genuinely selected and functional, not just
+    assumed.
+    """
+    import sys
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    redactor = Redactor()  # default enable_openai_filter=True
+    text = "Contact John Smith; leaked key: sk-abcdEFGH12345678901234"
+    redacted_text, rehydrate_map = redactor.redact(text)
+
+    assert "sk-abcdEFGH12345678901234" not in redacted_text
+    assert any(v == "sk-abcdEFGH12345678901234" for v in rehydrate_map.values())
+    # The OpenAI-filter recognizer itself found nothing (unavailable), but
+    # did not crash the pass for every other recognizer.
+    openai_recognizer = next(
+        r
+        for r in redactor._analyzer.registry.recognizers  # type: ignore[attr-defined]
+        if r.name == "OpenAIPrivacyFilterRecognizer"
+    )
+    assert openai_recognizer.analyze(text, entities=list(OPENAI_FILTER_ENTITIES)) == []
+
+
+def test_openai_privacy_filter_recognizer_marks_unavailable_without_torch(monkeypatch) -> None:
+    """Unit-level version of the above, isolating
+    :class:`OpenAIPrivacyFilterRecognizer` itself: ``load()`` must degrade
+    to ``model_unavailable=True`` rather than raising, and ``analyze()``
+    must then return ``[]`` instead of crashing on a ``None`` pipeline.
+
+    Note: Presidio's ``EntityRecognizer.__init__`` calls ``self.load()``
+    synchronously during construction, so ``model_unavailable`` is already
+    ``True`` immediately after ``OpenAIPrivacyFilterRecognizer()`` returns
+    -- this asserts that construction itself does not raise (the load
+    failure was absorbed), then confirms ``analyze()`` is a harmless no-op
+    on top of that already-degraded state."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setitem(sys.modules, "transformers", None)
+
+    recognizer = OpenAIPrivacyFilterRecognizer()  # must not raise
+    assert recognizer.model_unavailable is True
+
+    results = recognizer.analyze("Contact John Smith.", entities=list(OPENAI_FILTER_ENTITIES))
+    assert results == []

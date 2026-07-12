@@ -250,6 +250,56 @@ def test_post_config_rejects_non_loopback_ollama_base_url_under_local_true(tmp_p
     assert current["ollama_base_url"] == "http://localhost:11434"
 
 
+def test_post_config_rejects_non_loopback_ollama_base_url_under_provider_ollama_without_local(
+    tmp_path: Path,
+) -> None:
+    """Retry fix (closes a second prior review finding): the original check
+    only validated loopback-ness when ``local`` was true, so
+    ``provider="ollama", local=False`` could persist a non-loopback
+    ``ollama_base_url`` -- e.g. `compile.pipeline`/`query.engine`'s
+    `_default_client` factories route to Ollama whenever
+    ``settings.local or settings.llm_provider == "ollama"``, so this
+    combination was never a real network-egress bypass (the client's own
+    constructor still enforces loopback), but it left a stale, invalid
+    ``ollama_base_url`` sitting in config -- exactly the invariant this
+    config-time check exists to close. Now validated whenever *either*
+    ``local`` or ``llm_provider`` resolves to Ollama."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post(
+        "/api/config",
+        json={"provider": "ollama", "ollama_base_url": "http://evil.example.com:11434"},
+    )
+    assert response.status_code == 422
+    assert "loopback" in response.json()["detail"]
+
+    # The rejected update must not have been applied.
+    current = client.get("/api/config").json()
+    assert current["provider"] != "ollama" or current["ollama_base_url"] == "http://localhost:11434"
+    assert current["ollama_base_url"] == "http://localhost:11434"
+
+
+def test_post_config_rejects_switching_provider_to_ollama_with_an_already_remote_url(tmp_path: Path) -> None:
+    """Counterpart of the `local=True` "already remote" case above, for
+    `provider="ollama"`: validation is against the *effective* post-update
+    state, not just fields present in this specific request body."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    # First: only stage a remote ollama_base_url (provider left at its
+    # default, not "ollama" yet -- allowed).
+    r1 = client.post("/api/config", json={"ollama_base_url": "http://remote-ollama.example.com:11434"})
+    assert r1.status_code == 200
+
+    # Then: switching provider to "ollama" with that URL already in effect
+    # must fail.
+    r2 = client.post("/api/config", json={"provider": "ollama"})
+    assert r2.status_code == 422
+    assert "loopback" in r2.json()["detail"]
+    assert client.get("/api/config").json()["provider"] != "ollama"
+
+
 def test_post_config_rejects_switching_local_true_to_an_already_remote_url(tmp_path: Path) -> None:
     """Setting `local: true` while an already-stored `ollama_base_url` is
     remote (set in an earlier, separate request) must also be rejected --

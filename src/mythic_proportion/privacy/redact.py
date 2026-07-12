@@ -142,8 +142,28 @@ class OpenAIPrivacyFilterRecognizer:
     Subclasses ``presidio_analyzer.EntityRecognizer`` lazily: the base class
     itself is only imported inside :meth:`__init__`, and the actual
     ``transformers`` pipeline (which pulls in ``torch``) is only built inside
-    :meth:`load`, which Presidio's ``AnalyzerEngine`` calls once when the
-    recognizer is registered -- never at import time.
+    :meth:`load`, which Presidio's ``AnalyzerEngine`` calls once, lazily, the
+    *first time this recognizer's* ``analyze`` *is needed* -- not at
+    registration/construction time (see
+    ``presidio_analyzer.AnalyzerEngine.analyze``: it calls
+    ``recognizer.load()`` inline, inside the same per-recognizer loop that
+    calls ``recognizer.analyze()``, with no surrounding ``try/except`` of its
+    own).
+
+    **Fail-open-on-this-recognizer-only, not fail-crash (fixes a prior
+    review finding).** Because Presidio itself does not catch a failing
+    ``load()``, an earlier version of this class raised ``RuntimeError``
+    straight out of ``load()`` when ``torch``/``transformers`` (the opt-in
+    ``[privacy-full]`` extra) were missing -- which meant the *first* call to
+    :meth:`Redactor.redact` would crash the *entire* analysis pass (not just
+    skip this one recognizer) the moment ``[privacy]`` was installed without
+    ``[privacy-full]``, even though the module docstring's "honesty note"
+    already promised that combination degrades gracefully to Presidio's
+    builtins + :class:`SecretScanRecognizer`. ``load`` now instead marks
+    itself unavailable and returns normally; ``analyze`` then short-circuits
+    to an empty result list whenever the pipeline never came up, so a
+    missing ``[privacy-full]`` costs this one recognizer's coverage, not the
+    whole redaction pass.
     """
 
     def __init__(self, *, model_name: str = "openai/privacy-filter") -> None:
@@ -154,6 +174,11 @@ class OpenAIPrivacyFilterRecognizer:
 
         self._model_name = model_name
         self._pipeline: Any | None = None
+        #: True once :meth:`_Delegate.load` has tried and failed to import
+        #: torch/transformers -- lets :meth:`_Delegate.analyze` short-circuit
+        #: to "no results from this recognizer" instead of calling a
+        #: ``None`` pipeline.
+        self.model_unavailable: bool = False
         self._delegate = self._build_delegate()
 
     def _build_delegate(self) -> Any:
@@ -170,22 +195,45 @@ class OpenAIPrivacyFilterRecognizer:
                 )
 
             def load(self) -> None:
-                if outer._pipeline is not None:
+                if outer._pipeline is not None or outer.model_unavailable:
                     return
                 try:
                     import torch  # noqa: F401
                     from transformers import pipeline
-                except ImportError as exc:  # pragma: no cover - exercised only without torch
-                    raise RuntimeError(
-                        f"OpenAIPrivacyFilterRecognizer requires torch/transformers: {_INSTALL_HINT}"
-                    ) from exc
-                outer._pipeline = pipeline("token-classification", model=model_name)
+                except ImportError:
+                    # [privacy-full] not installed -- degrade to "this
+                    # recognizer finds nothing" rather than raising, so
+                    # Presidio's outer analyze() loop (which does not
+                    # protect recognizer.load() with its own try/except)
+                    # does not crash the whole pass. Presidio's own
+                    # built-ins + SecretScanRecognizer still run for real.
+                    outer.model_unavailable = True
+                    return
+                try:
+                    outer._pipeline = pipeline("token-classification", model=model_name)
+                except Exception:
+                    # Retry fix: `torch`/`transformers` being importable does
+                    # not guarantee the model actually loads (e.g. no
+                    # cached/downloadable weights in a sandboxed/offline
+                    # environment -- exactly this dev environment's shape,
+                    # since torch/transformers ARE installed here but the
+                    # model may not be reachable). `EntityRecognizer.__init__`
+                    # calls `load()` synchronously at construction time (see
+                    # this class's docstring), so an uncaught failure here
+                    # would crash *every* `Redactor()` construction, not just
+                    # degrade this one recognizer -- deliberately broad
+                    # ``except Exception`` (not just ``ImportError``) to
+                    # cover HTTP/OSError/ValueError model-loading failures,
+                    # not only missing-package failures.
+                    outer.model_unavailable = True
 
             def analyze(self, text: str, entities: list[str], nlp_artifacts: Any = None) -> list[Any]:
                 from presidio_analyzer import RecognizerResult
 
-                if outer._pipeline is None:
+                if outer._pipeline is None and not outer.model_unavailable:
                     self.load()
+                if outer._pipeline is None:
+                    return []
                 raw = outer._pipeline(text)  # type: ignore[misc]
                 results: list[Any] = []
                 for token in raw:

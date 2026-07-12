@@ -152,6 +152,16 @@ def _maybe_redact(client: CompileClient, settings: Settings) -> CompileClient:
     ``[privacy]`` extra isn't installed), this raises :class:`CompileError`
     rather than silently returning the unwrapped ``client`` -- no compile
     call is made with potentially-unredacted content in that case.
+
+    **Applied at the outbound edge, not just at client-construction time**
+    (closes a prior review finding): :func:`compile_source` calls this on
+    *every* client it is about to call ``.compile()`` on -- whether that
+    client came from :func:`_default_client` or was passed in directly via
+    the ``client=`` override -- so an injected client (real or fake) can
+    never bypass this guard. Callers that intentionally want no redaction
+    (e.g. tests exercising unrelated compile mechanics) must say so
+    explicitly via ``settings=Settings(..., redaction_enabled=False)``,
+    never implicitly via client injection.
     """
     from mythic_proportion.privacy.redact import RedactingCompileClient, RedactionUnavailableError, get_redactor
 
@@ -180,18 +190,21 @@ def _default_client(settings: Settings) -> CompileClient:
     every Ollama client it builds, so a non-loopback URL under either
     ``local: true`` or an explicit ``llm_provider="ollama"`` is converted to
     :class:`CompileError` here rather than propagating as a raw
-    ``OllamaConfigError``. Every real client built here is wrapped with
-    :func:`_maybe_redact` before being returned.
+    ``OllamaConfigError``.
+
+    Note: this function does **not** apply :func:`_maybe_redact` itself --
+    :func:`compile_source` applies it once, uniformly, to whichever client
+    ends up active (this function's return value, or an injected
+    ``client=`` override), so there is exactly one place redaction can be
+    bypassed: an explicit ``redaction_enabled=False`` in ``settings``.
     """
     if settings.local or settings.llm_provider == "ollama":
         from mythic_proportion.llm.ollama import OllamaCompileClient, OllamaConfigError
 
         try:
-            ollama_client = OllamaCompileClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+            return OllamaCompileClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
         except OllamaConfigError as exc:
             raise CompileError(str(exc)) from exc
-
-        return _maybe_redact(ollama_client, settings)
 
     if settings.llm_provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -200,7 +213,7 @@ def _default_client(settings: Settings) -> CompileClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
-        return _maybe_redact(AnthropicCompileClient(model=settings.model, api_key=api_key), settings)
+        return AnthropicCompileClient(model=settings.model, api_key=api_key)
 
     if settings.llm_provider == "authhub":
         api_key = authhub_api_key()
@@ -211,14 +224,11 @@ def _default_client(settings: Settings) -> CompileClient:
             )
         from mythic_proportion.llm.authhub import AuthHubCompileClient
 
-        return _maybe_redact(
-            AuthHubCompileClient(
-                base_url=base_url,
-                api_key=api_key,
-                model=settings.llm_model,
-                route_alias=settings.route_alias or None,
-            ),
-            settings,
+        return AuthHubCompileClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=settings.llm_model,
+            route_alias=settings.route_alias or None,
         )
 
     raise CompileError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")
@@ -251,11 +261,18 @@ def compile_source(
     client's ``compile`` call raises, this raises
     :class:`~mythic_proportion.compile.models.CompileError` -- it no longer
     degrades to a stub page.
+
+    **Redaction is applied at the outbound edge** (closes a prior review
+    finding): whichever client ends up active -- default-selected or
+    injected via ``client=`` -- is passed through :func:`_maybe_redact`
+    before its ``.compile()`` method is ever called, so an injected client
+    cannot silently bypass the fail-closed redaction guarantee.
     """
     vault_root = Path(vault_root)
     settings = settings or load_settings(vault_root)
     now = now or datetime.now(timezone.utc)
     active_client = client if client is not None else _default_client(settings)
+    active_client = _maybe_redact(active_client, settings)
 
     schema_path = vault_root / SCHEMA_FILE
     schema_md = schema_path.read_text(encoding="utf-8") if schema_path.is_file() else ""

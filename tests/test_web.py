@@ -219,6 +219,7 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     client injection, so this drives ``answer_query`` directly (the same
     function `/api/query` calls) to prove the synthesis contract, and
     separately checks the endpoint's never-500 wrapper above."""
+    from mythic_proportion.config import Settings
     from mythic_proportion.query.client import AnswerResult, FakeAnswerClient
     from mythic_proportion.query.engine import answer_query
 
@@ -226,7 +227,14 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     client = FakeAnswerClient(
         AnswerResult(text="Hybrid retrieval blends BM25 and vectors [[Hybrid Retrieval]].", citations=[])
     )
-    answer = answer_query(vault, "how does hybrid retrieval work?", client=client)
+    # Redaction is on by default and, with [privacy]/[privacy-full] installed
+    # in this dev environment, building a real default Redactor() loads an
+    # actual local transformer pipeline (multi-second). This test exercises
+    # the synthesis contract, not privacy, so it explicitly opts out (see
+    # test_privacy_redact.py for dedicated redaction-behavior coverage).
+    answer = answer_query(
+        vault, "how does hybrid retrieval work?", client=client, settings=Settings(vault_path=vault, redaction_enabled=False)
+    )
     assert answer.used_llm is True
     assert "Hybrid Retrieval" in answer.citations
 

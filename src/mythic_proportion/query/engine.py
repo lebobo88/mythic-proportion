@@ -101,6 +101,16 @@ def _maybe_redact(client: AnswerClient, settings: Settings) -> AnswerClient:
     **Fail-closed**: if redaction is enabled but unavailable, raises
     :class:`AnswerError` rather than silently returning the unwrapped
     ``client`` -- no answer call is made with potentially-unredacted content.
+
+    **Applied at the outbound edge, not just at client-construction time**
+    (closes a prior review finding): :func:`answer_query` calls this on
+    *every* client it is about to call ``.answer()`` on -- whether that
+    client came from :func:`_default_client` or was passed in directly via
+    the ``client=`` override -- so an injected client (real or fake) can
+    never bypass this guard. Callers that intentionally want no redaction
+    (e.g. tests exercising unrelated query mechanics) must say so
+    explicitly via ``settings=Settings(..., redaction_enabled=False)``,
+    never implicitly via client injection.
     """
     from mythic_proportion.privacy.redact import RedactingAnswerClient, RedactionUnavailableError, get_redactor
 
@@ -130,18 +140,21 @@ def _default_client(settings: Settings) -> AnswerClient:
     ``OllamaAnswerClient``'s own constructor enforces this unconditionally
     (``llm.ollama._OllamaBase.__init__``), so a non-loopback URL is converted
     to :class:`AnswerError` here rather than propagating as a raw
-    ``OllamaConfigError``. Every real client built here is wrapped with
-    :func:`_maybe_redact` before being returned.
+    ``OllamaConfigError``.
+
+    Note: this function does **not** apply :func:`_maybe_redact` itself --
+    :func:`answer_query` applies it once, uniformly, to whichever client
+    ends up active (this function's return value, or an injected
+    ``client=`` override), so there is exactly one place redaction can be
+    bypassed: an explicit ``redaction_enabled=False`` in ``settings``.
     """
     if settings.local or settings.llm_provider == "ollama":
         from mythic_proportion.llm.ollama import OllamaAnswerClient, OllamaConfigError
 
         try:
-            ollama_client = OllamaAnswerClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+            return OllamaAnswerClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
         except OllamaConfigError as exc:
             raise AnswerError(str(exc)) from exc
-
-        return _maybe_redact(ollama_client, settings)
 
     if settings.llm_provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -150,7 +163,7 @@ def _default_client(settings: Settings) -> AnswerClient:
                 "LLM not configured: set ANTHROPIC_API_KEY (provider=anthropic, "
                 f"model={settings.model!r})"
             )
-        return _maybe_redact(AnthropicAnswerClient(model=settings.model, api_key=api_key), settings)
+        return AnthropicAnswerClient(model=settings.model, api_key=api_key)
 
     if settings.llm_provider == "authhub":
         api_key = authhub_api_key()
@@ -161,14 +174,11 @@ def _default_client(settings: Settings) -> AnswerClient:
             )
         from mythic_proportion.llm.authhub import AuthHubAnswerClient
 
-        return _maybe_redact(
-            AuthHubAnswerClient(
-                base_url=base_url,
-                api_key=api_key,
-                model=settings.llm_model,
-                route_alias=settings.route_alias or None,
-            ),
-            settings,
+        return AuthHubAnswerClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=settings.llm_model,
+            route_alias=settings.route_alias or None,
         )
 
     raise AnswerError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")
@@ -181,6 +191,14 @@ def _maybe_redact_extraction(client: ExtractionClient, settings: Settings) -> Ex
     other extraction-path error type -- see :func:`_default_extraction_client`)
     if redaction is enabled but unavailable, rather than silently returning
     the unwrapped ``client``.
+
+    **Applied at the outbound edge, not just at client-construction time**
+    (closes a prior review finding): :func:`answer_query`'s GraphRAG branch
+    calls this on *every* extraction client it is about to call
+    ``.complete()`` on -- whether that client came from
+    :func:`_default_extraction_client` or was passed in directly via the
+    ``graph_client=`` override -- so an injected client can never bypass
+    this guard.
     """
     from mythic_proportion.privacy.redact import RedactingExtractionClient, RedactionUnavailableError, get_redactor
 
@@ -204,16 +222,19 @@ def _default_extraction_client(settings: Settings) -> ExtractionClient:
     to :class:`~mythic_proportion.llm.ollama.OllamaExtractionClient`, same as
     :func:`_default_client`. ``settings.ollama_base_url`` must be
     loopback-only, enforced by the client's own constructor and converted to
-    :class:`AnswerError` here (see :func:`_default_client`'s docstring)."""
+    :class:`AnswerError` here (see :func:`_default_client`'s docstring).
+
+    Note: this function does **not** apply :func:`_maybe_redact_extraction`
+    itself -- :func:`answer_query` applies it once, uniformly, to whichever
+    extraction client ends up active (this function's return value, or an
+    injected ``graph_client=`` override)."""
     if settings.local or settings.llm_provider == "ollama":
         from mythic_proportion.llm.ollama import OllamaConfigError, OllamaExtractionClient
 
         try:
-            ollama_client = OllamaExtractionClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
+            return OllamaExtractionClient(base_url=settings.ollama_base_url, model=settings.ollama_model)
         except OllamaConfigError as exc:
             raise AnswerError(str(exc)) from exc
-
-        return _maybe_redact_extraction(ollama_client, settings)
 
     api_key = authhub_api_key()
     if not api_key:
@@ -223,14 +244,11 @@ def _default_extraction_client(settings: Settings) -> ExtractionClient:
         )
     from mythic_proportion.graph.extract import AuthHubExtractionClient
 
-    return _maybe_redact_extraction(
-        AuthHubExtractionClient(
-            base_url=authhub_base_url(settings),
-            api_key=api_key,
-            model=settings.llm_model,
-            route_alias=settings.route_alias or None,
-        ),
-        settings,
+    return AuthHubExtractionClient(
+        base_url=authhub_base_url(settings),
+        api_key=api_key,
+        model=settings.llm_model,
+        route_alias=settings.route_alias or None,
     )
 
 
@@ -310,6 +328,13 @@ def answer_query(
     ``"legacy"`` forces the pre-Phase-4 path unconditionally; explicit
     ``"global"``/``"local"``/``"drift"``/``"activation"`` force one specific
     GraphRAG mode (see :mod:`mythic_proportion.query.modes`).
+
+    **Redaction is applied at the outbound edge** (closes a prior review
+    finding): whichever client ends up active on either path -- default-
+    selected or injected via ``client=``/``graph_client=`` -- is passed
+    through :func:`_maybe_redact`/:func:`_maybe_redact_extraction` before
+    its LLM call is ever made, so an injected client cannot silently bypass
+    the fail-closed redaction guarantee.
     """
     vault_root = Path(vault_root)
     settings = settings or load_settings(vault_root)
@@ -331,6 +356,7 @@ def answer_query(
             active_graph_client = (
                 graph_client if graph_client is not None else _default_extraction_client(settings)
             )
+            active_graph_client = _maybe_redact_extraction(active_graph_client, settings)
             cache = LlmCache(store.conn)
             mode_result: ModeResult
             if resolved_mode == "global":
@@ -376,6 +402,7 @@ def answer_query(
         raise AnswerError("LLM synthesis is required: answer_query was called with use_llm=False")
 
     active_client = client if client is not None else _default_client(settings)
+    active_client = _maybe_redact(active_client, settings)
 
     hot_md = _read_hot(vault_root)
     prompt = build_answer_prompt(question=question, hot_md=hot_md, hits=hits, body_by_path=body_by_path)

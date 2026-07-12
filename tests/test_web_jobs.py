@@ -28,7 +28,15 @@ def _seed_vault(tmp_path: Path) -> Path:
 
 
 def _settings(vault: Path) -> Settings:
-    return Settings(vault_path=vault)
+    # Redaction is on by default and, with [privacy]/[privacy-full] installed
+    # in this dev environment, building a real default Redactor() loads an
+    # actual local transformer pipeline (multi-second) -- compile_source now
+    # applies get_redactor() uniformly to whichever client ends up active,
+    # including a `_default_client` swapped out via monkeypatch (retry fix
+    # closing a fail-closed bypass a prior review found). These tests
+    # exercise the worker/queue mechanics, not privacy, so they explicitly
+    # opt out (see test_privacy_redact.py for dedicated redaction coverage).
+    return Settings(vault_path=vault, redaction_enabled=False)
 
 
 def _drop_file(vault: Path, name: str, content: bytes = b"# note\n\nSome content.\n") -> None:

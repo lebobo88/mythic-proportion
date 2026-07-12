@@ -20,6 +20,25 @@ from mythic_proportion.query.engine import answer_query
 from mythic_proportion.vault.init import init_vault
 
 
+def _settings(vault: Path, **overrides) -> Settings:  # noqa: ANN003
+    """Redaction is on by default (``Settings.redaction_enabled=True``) and,
+    with ``[privacy]``/``[privacy-full]`` installed in this dev environment,
+    building a *real* default ``Redactor()`` loads an actual local
+    transformer pipeline (multi-second, and the very first time, a real
+    HuggingFace Hub fetch) -- see ``compile.pipeline``/``query.engine``'s
+    retry fix that now applies :func:`mythic_proportion.privacy.redact.get_redactor`
+    uniformly to every active client, including one injected via ``client=``/
+    ``graph_client=`` (closing the fail-closed bypass a prior review found).
+    These tests exercise query mechanics, not privacy, so they explicitly
+    opt out of redaction here -- exactly the "explicit ``redaction_enabled=
+    False``" escape hatch the fail-closed contract requires (never an
+    implicit bypass via client injection). Dedicated redaction-behavior
+    coverage lives in ``test_privacy_redact.py``."""
+    base: dict = {"vault_path": vault, "redaction_enabled": False}
+    base.update(overrides)
+    return Settings(**base)
+
+
 def _seed_vault(tmp_path: Path) -> Path:
     vault = tmp_path / "vault"
     init_vault(vault)
@@ -99,7 +118,7 @@ def test_empty_vault_with_fake_client_returns_no_hits(tmp_path: Path) -> None:
         return AnswerResult(text="No relevant pages were found in the vault.", citations=[])
 
     client = FakeAnswerClient(_fixture)
-    answer = answer_query(vault, "anything at all", client=client)
+    answer = answer_query(vault, "anything at all", client=client, settings=_settings(vault))
     assert answer.hits == []
     assert answer.citations == []
     assert answer.used_llm is True
@@ -122,7 +141,7 @@ def test_fake_client_retrieves_and_cites_known_page(tmp_path: Path) -> None:
 
     client = FakeAnswerClient(_fixture)
     answer = answer_query(
-        vault, "how does hybrid retrieval combine BM25 and vectors?", client=client, k=3
+        vault, "how does hybrid retrieval combine BM25 and vectors?", client=client, k=3, settings=_settings(vault)
     )
 
     assert answer.used_llm is True
@@ -136,7 +155,7 @@ def test_fake_client_citations_parsed_from_text_when_absent(tmp_path: Path) -> N
     client = FakeAnswerClient(
         AnswerResult(text="See [[Hybrid Retrieval]] and [[Wikilink Graph]].", citations=[])
     )
-    answer = answer_query(vault, "hybrid retrieval and the wikilink graph", client=client)
+    answer = answer_query(vault, "hybrid retrieval and the wikilink graph", client=client, settings=_settings(vault))
 
     assert answer.used_llm is True
     assert set(answer.citations) == {"Hybrid Retrieval", "Wikilink Graph"}
@@ -150,7 +169,7 @@ def test_client_failure_propagates_as_answer_error(tmp_path: Path) -> None:
 
     client = FakeAnswerClient(_boom)
     with pytest.raises(AnswerError, match="simulated client failure"):
-        answer_query(vault, "hybrid retrieval bm25 vector search", client=client)
+        answer_query(vault, "hybrid retrieval bm25 vector search", client=client, settings=_settings(vault))
 
 
 # --------------------------------------------------------------------------
@@ -264,7 +283,7 @@ def test_omitted_mode_unconditionally_takes_the_legacy_path(tmp_path: Path) -> N
     vault = _seed_vault(tmp_path)
     client = FakeAnswerClient(AnswerResult(text="legacy answer", citations=[]))
 
-    answer = answer_query(vault, "hybrid retrieval bm25 vector search", client=client)
+    answer = answer_query(vault, "hybrid retrieval bm25 vector search", client=client, settings=_settings(vault))
 
     assert answer.used_llm is True
     assert answer.text == "legacy answer"
@@ -284,7 +303,7 @@ def test_omitted_mode_takes_the_legacy_path_even_when_graph_data_exists(tmp_path
         graph_store.upsert_relationship(a, b, "related", "", 1.0)
 
     client = FakeAnswerClient(AnswerResult(text="still legacy", citations=[]))
-    answer = answer_query(vault, "give me an overview of everything", client=client)
+    answer = answer_query(vault, "give me an overview of everything", client=client, settings=_settings(vault))
 
     assert answer.text == "still legacy"
     assert answer.resolved_mode is None
@@ -298,7 +317,7 @@ def test_explicit_legacy_mode_forces_legacy_path_even_with_graph_data_present(tm
 
     client = FakeAnswerClient(AnswerResult(text="legacy still used", citations=[]))
     answer = answer_query(
-        vault, "hybrid retrieval bm25 vector search", client=client, mode="legacy"
+        vault, "hybrid retrieval bm25 vector search", client=client, mode="legacy", settings=_settings(vault)
     )
     assert answer.text == "legacy still used"
 
@@ -314,7 +333,9 @@ def test_explicit_local_mode_routes_through_the_graph_extraction_client(tmp_path
     graph_client = FakeExtractionClient(
         '{"answer": "graph-based answer", "citations": ["HYBRID RETRIEVAL"]}'
     )
-    answer = answer_query(vault, "HYBRID RETRIEVAL", mode="local", graph_client=graph_client)
+    answer = answer_query(
+        vault, "HYBRID RETRIEVAL", mode="local", graph_client=graph_client, settings=_settings(vault)
+    )
 
     assert answer.used_llm is True
     assert answer.text == "graph-based answer"
@@ -346,7 +367,11 @@ def test_auto_mode_routes_to_global_for_an_overview_question_once_graph_data_exi
 
     graph_client = FakeExtractionClient(_fixture)
     answer = answer_query(
-        vault, "give me an overview of everything", mode="auto", graph_client=graph_client
+        vault,
+        "give me an overview of everything",
+        mode="auto",
+        graph_client=graph_client,
+        settings=_settings(vault),
     )
 
     assert answer.text == "global auto answer"

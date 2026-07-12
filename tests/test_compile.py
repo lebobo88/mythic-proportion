@@ -49,7 +49,16 @@ def _make_source(vault: Path, name: str, content: bytes) -> IngestedSource:
 
 
 def _settings(vault: Path, allow_egress: bool = False) -> Settings:
-    return Settings(vault_path=vault, allow_egress=allow_egress)
+    # Redaction is on by default and, with [privacy]/[privacy-full]
+    # installed in this dev environment, building a real default Redactor()
+    # loads an actual local transformer pipeline (multi-second). Retry fix:
+    # compile_source now applies get_redactor() uniformly to every active
+    # client, including one injected via `client=` (closing the fail-closed
+    # bypass a prior review found) -- these tests exercise compile
+    # mechanics, not privacy, so they explicitly opt out here (the required
+    # explicit escape hatch, never an implicit bypass via client injection).
+    # Dedicated redaction-behavior coverage lives in test_privacy_redact.py.
+    return Settings(vault_path=vault, allow_egress=allow_egress, redaction_enabled=False)
 
 
 # --------------------------------------------------------------------------
