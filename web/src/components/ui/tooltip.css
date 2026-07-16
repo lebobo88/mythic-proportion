@@ -1,0 +1,13 @@
+.mp-tooltip-content {
+  background-color: var(--tooltip-bg);
+  color: var(--tooltip-fg);
+  border-radius: var(--tooltip-radius);
+  box-shadow: var(--tooltip-shadow);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  animation: mp-fade-in var(--duration-fast) var(--ease-out);
+}
+
+.mp-tooltip-arrow {
+  fill: var(--tooltip-bg);
+}

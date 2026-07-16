@@ -1,0 +1,42 @@
+{
+  "name": "mythic-proportion-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vite + React + React Three Fiber frontend for Mythic Proportion, built to static assets and served by the existing FastAPI `mythic serve` (see src/mythic_proportion/web/app.py).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.19",
+    "@radix-ui/react-tooltip": "^1.2.12",
+    "@react-three/drei": "^9.114.3",
+    "@react-three/fiber": "^8.17.10",
+    "@three.ez/instanced-mesh": "^0.3.15",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "culori": "^4.0.2",
+    "d3-force-3d": "^3.0.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.169.0",
+    "troika-three-text": "^0.52.4"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/culori": "^4.0.1",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^4.1.10"
+  }
+}

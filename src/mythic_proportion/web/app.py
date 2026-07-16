@@ -18,19 +18,29 @@ from typing import Any
 from pydantic import BaseModel
 
 from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.graph.store import GraphStore
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.retrieve import hybrid_search
 from mythic_proportion.index.store import IndexStore
 from mythic_proportion.query.engine import answer_query
 from mythic_proportion.vault.lint import lint_fix, lint_vault
-from mythic_proportion.web.jobs import _IDLE_STATE, IngestWorker
+from mythic_proportion.web.jobs import _GRAPH_IDLE_STATE, _IDLE_STATE, IngestWorker
 from mythic_proportion.web.pages import backlinks_index, collect_pages, title_to_path_index
 from mythic_proportion.web.render import render_markdown, render_snippet_html
 
 STATIC_DIR = Path(__file__).with_name("static")
 
-#: Providers ``POST /api/config`` will accept for ``llm_provider``.
-_VALID_PROVIDERS = {"authhub", "anthropic"}
+#: Build output of the greenfield Vite/React/R3F workspace (``web/``), mounted
+#: at ``/app`` when present (see ``vite.config.ts``: ``base: "/app/"``,
+#: ``outDir: "../src/mythic_proportion/web/static_next"``). Deliberately a
+#: *new*, sibling directory to the legacy ``static/`` -- the legacy SPA at
+#: ``/`` is untouched (parity requirement, see specs/parity-checklist.md).
+STATIC_NEXT_DIR = Path(__file__).with_name("static_next")
+
+#: Providers ``POST /api/config`` will accept for ``llm_provider``. Phase 6
+#: adds ``"ollama"`` (a fully-local model via a local Ollama daemon -- see
+#: :mod:`mythic_proportion.llm.ollama`).
+_VALID_PROVIDERS = {"authhub", "anthropic", "ollama"}
 
 #: AuthHub's "list models" endpoint (sibling of the chat-completions path used
 #: by :mod:`mythic_proportion.llm.authhub`).
@@ -43,6 +53,16 @@ class QueryRequest(BaseModel):
     question: str
     use_llm: bool = True
     k: int = 8
+    #: Phase 4, CORRECTED per memory/invariants.md's "POST /api/query
+    #: contract -- CORRECTION" entry: `mode` has NO DEFAULT. A request that
+    #: omits this key entirely always takes the exact pre-Phase-4 legacy
+    #: path (`api_query` below never even passes a mode through to
+    #: `answer_query` in that case) -- unconditionally, regardless of graph
+    #: state. Explicit "auto" opts in to heuristic dispatch; explicit
+    #: "legacy"/"global"/"local"/"drift"/"activation" force that path. The
+    #: Ask view's mode dropdown sends an explicit value; its own default
+    #: (no selection) omits the key entirely.
+    mode: str | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -56,6 +76,16 @@ class ConfigUpdateRequest(BaseModel):
     model: str | None = None
     provider: str | None = None
     route_alias: str | None = None
+    #: Phase 6 additions -- all strictly additive/optional; omitting them
+    #: leaves the corresponding setting untouched, exactly like the
+    #: pre-existing fields above.
+    local: bool | None = None
+    redaction_enabled: bool | None = None
+    ollama_base_url: str | None = None
+    ollama_model: str | None = None
+    #: Bugfix DEFECT 1 (wiring gap) addition -- strictly additive/optional,
+    #: same shape as the other Phase 6 toggles above.
+    auto_build_graph: bool | None = None
 
 
 def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
@@ -106,6 +136,17 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         app.state.ingest_worker.stop()
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # Greenfield Vite/React/R3F build (see web/vite.config.ts), mounted at
+    # /app -- guarded so this no-ops entirely if `npm run build` has never
+    # been run (e.g. a fresh clone without the web/ toolchain). The legacy
+    # SPA at "/" above is unaffected either way (parity requirement).
+    if STATIC_NEXT_DIR.is_dir():
+        app.mount(
+            "/app",
+            StaticFiles(directory=str(STATIC_NEXT_DIR), html=True),
+            name="static_next",
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -177,10 +218,21 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
 
     @app.post("/api/query")
     def api_query(req: QueryRequest) -> dict[str, Any]:
+        # Binding contract (memory/invariants.md, "POST /api/query contract --
+        # CORRECTION"): whether the request carried an explicit `mode` key is
+        # a static property of THIS request, decided once, here -- never
+        # re-derived from vault/graph state. `explicit_mode` gates every
+        # place below that would add a new (strictly additive) response key.
+        explicit_mode = req.mode is not None
         current_settings = app.state.settings
         try:
             answer = answer_query(
-                vault_root, req.question, k=req.k, use_llm=req.use_llm, settings=current_settings
+                vault_root,
+                req.question,
+                k=req.k,
+                use_llm=req.use_llm,
+                mode=req.mode,
+                settings=current_settings,
             )
         except Exception as exc:  # noqa: BLE001 - the API must never 500 on a query
             # Still surface retrieval hits even when synthesis is unavailable,
@@ -189,27 +241,63 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             with IndexStore(vault_root, embedder) as store:
                 store.reindex(vault_root)
                 hits = hybrid_search(store, req.question, k=req.k)
-            return {
+            response: dict[str, Any] = {
                 "text": f"LLM unavailable via AuthHub at {authhub_base_url(current_settings)}: {exc}",
                 "citations": [],
                 "hits": [asdict(hit) for hit in hits],
                 "used_llm": False,
                 "error": True,
             }
-        return {
+            if explicit_mode:
+                # `resolved` is unknown here -- the exception may have been
+                # raised before/without a mode resolution completing -- so
+                # only `requested` (what the caller asked for) is surfaced.
+                response["mode"] = req.mode
+                response["mode_detail"] = {"requested": req.mode, "resolved": None}
+                for hit in response["hits"]:
+                    hit["source_kind"] = "page"
+            return response
+
+        response = {
             "text": answer.text,
             "citations": answer.citations,
             "hits": [asdict(hit) for hit in answer.hits],
             "used_llm": answer.used_llm,
             "error": False,
         }
+        if explicit_mode:
+            # Omitted-mode requests (`explicit_mode` False) never reach this
+            # branch -- their response is exactly the legacy 5-key dict
+            # above, with no `mode`/`mode_detail` keys and no `source_kind`
+            # on any hit, per the binding legacy-shape contract.
+            response["mode"] = req.mode
+            response["mode_detail"] = {"requested": req.mode, "resolved": answer.resolved_mode}
+            for hit in response["hits"]:
+                hit["source_kind"] = "page"
+        return response
 
     @app.get("/api/graph")
-    def api_graph() -> dict[str, Any]:
+    def api_graph(mode: str = "wikilinks") -> dict[str, Any]:
+        """`mode` selects which graph view to return:
+
+        * `wikilinks` (default) -- the original [[wikilink]] page graph.
+          Unchanged from before Phase 3: same node/edge shape, same query,
+          never touches the GraphRAG tables at all.
+        * `entities` -- the GraphRAG semantic graph (entity nodes, typed +
+          weighted relationship edges) populated by `mythic index-graph`
+          (empty nodes/edges if that has never been run).
+        * `both` -- the union of the two, with `"kind": "page"|"entity"` on
+          every node so callers can tell them apart.
+        """
+        if mode not in ("wikilinks", "entities", "both"):
+            raise HTTPException(
+                status_code=422, detail=f"invalid mode {mode!r}: expected one of wikilinks|entities|both"
+            )
+
         pages = collect_pages(vault_root)
         title_to_path = title_to_path_index(pages)
-        nodes = [{"id": page.path, "label": page.title, "type": page.page_type} for page in pages]
-        edges: list[dict[str, str]] = []
+        page_nodes = [{"id": page.path, "label": page.title, "type": page.page_type} for page in pages]
+        page_edges: list[dict[str, str]] = []
         seen: set[tuple[str, str]] = set()
         for page in pages:
             for target_title in page.outbound:
@@ -220,8 +308,29 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
                 if key in seen:
                     continue
                 seen.add(key)
-                edges.append({"source": page.path, "target": target_path})
-        return {"nodes": nodes, "edges": edges}
+                page_edges.append({"source": page.path, "target": target_path})
+
+        if mode == "wikilinks":
+            return {"nodes": page_nodes, "edges": page_edges}
+
+        # `entities`/`both` read the GraphRAG tables from the same SQLite DB
+        # `IndexStore` manages -- opened read-only-in-spirit here (embedder
+        # `None` means this open never re-embeds/reindexes pages; it's just
+        # a connection onto whatever `mythic index-graph` already wrote).
+        # `sync_embedder=False` is load-bearing: without it, an
+        # `embedder=None` open looks like an embedder-identity *change*
+        # against a vault already indexed with a real embedder, and
+        # `_sync_embedder_meta` wipes pages/pages_fts/page_vectors/vec_pages
+        # as a result. This open must never touch that state.
+        with IndexStore(vault_root, embedder=None, sync_embedder=False) as store:
+            entity_nodes, entity_edges = GraphStore(store.conn).read_entity_graph()
+
+        if mode == "entities":
+            return {"nodes": entity_nodes, "edges": entity_edges}
+
+        # mode == "both"
+        kinded_page_nodes = [{**node, "kind": "page"} for node in page_nodes]
+        return {"nodes": kinded_page_nodes + entity_nodes, "edges": page_edges + entity_edges}
 
     @app.post("/api/ingest")
     def api_ingest() -> dict[str, Any]:
@@ -270,6 +379,29 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             raise HTTPException(status_code=404, detail=f"job not found: {job_id!r}")
         return job
 
+    @app.post("/api/index-graph")
+    def api_index_graph() -> dict[str, Any]:
+        """Enqueue a "Build Knowledge Graph" job -- the web UI's equivalent
+        of `mythic index-graph` (bugfix DEFECT 1: that command previously
+        had no real entry point at all). Runs on the same single background
+        worker thread as ingest jobs (never concurrently with one), for the
+        same CPU-stampede/write-race reasons `web.jobs.IngestWorker`
+        already documents for ingest. Poll `GET /api/index-graph/status`
+        for progress; a real LLM-cost operation, so this is only ever
+        triggered explicitly (this endpoint) or via the opt-in
+        `auto_build_graph` Settings toggle after an ingest job.
+        """
+        job_id = app.state.ingest_worker.enqueue_graph()
+        return {"job_id": job_id}
+
+    @app.get("/api/index-graph/status")
+    def api_index_graph_status(job_id: str | None = None) -> dict[str, Any]:
+        """Current state of one graph-build job, or the most recently
+        enqueued one if `job_id` is omitted. Never 500s: mirrors
+        `GET /api/ingest/status`'s idle-state contract."""
+        job = app.state.ingest_worker.get_graph_job(job_id)
+        return job if job is not None else dict(_GRAPH_IDLE_STATE)
+
     @app.get("/api/lint")
     def api_lint() -> dict[str, Any]:
         report = lint_vault(vault_root)
@@ -301,14 +433,30 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
         current_settings = app.state.settings
+        # Phase 6: `local: true` routes everything through Ollama and never
+        # touches the cloud -- `has_api_key` reflects that (Ollama needs no
+        # API key at all; it's a reachability question, not a credential
+        # one, so we simply omit any cloud-key claim in that case).
+        if current_settings.local or current_settings.llm_provider == "ollama":
+            has_api_key = True
+        elif current_settings.llm_provider == "authhub":
+            has_api_key = bool(authhub_api_key())
+        else:
+            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
         return {
             "provider": current_settings.llm_provider,
             "model": current_settings.llm_model,
             "authhub_base_url": authhub_base_url(current_settings),
             "route_alias": current_settings.route_alias,
-            "has_api_key": bool(authhub_api_key())
-            if current_settings.llm_provider == "authhub"
-            else bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "has_api_key": has_api_key,
+            # Phase 6 additions -- strictly additive.
+            "local": current_settings.local,
+            "redaction_enabled": current_settings.redaction_enabled,
+            "ollama_base_url": current_settings.ollama_base_url,
+            "ollama_model": current_settings.ollama_model,
+            "embeddings_backend": current_settings.embeddings_backend,
+            # Bugfix DEFECT 1 addition -- strictly additive.
+            "auto_build_graph": current_settings.auto_build_graph,
         }
 
     @app.post("/api/config")
@@ -331,6 +479,65 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
 
         if req.route_alias is not None:
             update["route_alias"] = req.route_alias or None
+
+        if req.local is not None:
+            update["local"] = req.local
+
+        if req.redaction_enabled is not None:
+            update["redaction_enabled"] = req.redaction_enabled
+
+        if req.auto_build_graph is not None:
+            update["auto_build_graph"] = req.auto_build_graph
+
+        if req.ollama_base_url is not None:
+            if not req.ollama_base_url.strip():
+                raise HTTPException(status_code=422, detail="ollama_base_url must be a non-empty string")
+            update["ollama_base_url"] = req.ollama_base_url
+
+        if req.ollama_model is not None:
+            if not req.ollama_model.strip():
+                raise HTTPException(status_code=422, detail="ollama_model must be a non-empty string")
+            update["ollama_model"] = req.ollama_model
+
+        # Phase 6 fix (closes a prior review finding): `local: true` with a
+        # non-loopback `ollama_base_url` would egress prompts off-host. Validate
+        # the *effective* post-update state -- whether `local` or
+        # `ollama_base_url` (or neither, i.e. an already-local vault) is the
+        # field actually being changed in this request -- and reject rather
+        # than silently accepting a remote URL. This is the config-set-time
+        # half of the enforcement; `compile.pipeline`/`query.engine`'s
+        # `_default_client` factories enforce the same rule again at
+        # client-construction time.
+        #
+        # Retry fix (closes a second prior review finding): the original
+        # check only fired when `effective_local` was true, so
+        # `provider="ollama", local=False` could persist a non-loopback
+        # `ollama_base_url` via this endpoint -- e.g. an admin sets
+        # `provider=ollama` first and `ollama_base_url` in a later request
+        # with `local` never touched (still `False`). The construction-time
+        # guard in `compile.pipeline`/`query.engine`'s `_default_client`
+        # still refused to actually egress in that case (both branches route
+        # through Ollama whenever `local or llm_provider == "ollama"`), so
+        # this was never a real network bypass -- but it left a stale,
+        # invalid `ollama_base_url` sitting in config, which is itself the
+        # invariant this config-time check exists to close. Now validated
+        # whenever *either* `local` or `llm_provider` resolves to routing
+        # through Ollama.
+        effective_local = update.get("local", current_settings.local)
+        effective_provider = update.get("llm_provider", current_settings.llm_provider)
+        effective_ollama_base_url = update.get("ollama_base_url", current_settings.ollama_base_url)
+        if effective_local or effective_provider == "ollama":
+            from mythic_proportion.llm.ollama import OllamaConfigError, require_loopback_url
+
+            context = (
+                "POST /api/config (local=True)"
+                if effective_local
+                else "POST /api/config (provider=ollama)"
+            )
+            try:
+                require_loopback_url(effective_ollama_base_url, context=context)
+            except OllamaConfigError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if update:
             app.state.settings = current_settings.model_copy(update=update)

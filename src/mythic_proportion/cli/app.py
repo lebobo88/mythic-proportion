@@ -132,6 +132,17 @@ def reindex(
     re-embedded/re-written; pages removed from disk are dropped from the
     index. A utility command (not one of the five headline verbs) that
     Phase 5's `query` relies on to keep retrieval fresh.
+
+    Phase 6 re-embed migration path: this same command is how an existing
+    vault picks up a new embedder (e.g. installing `[embeddings]` so
+    `embeddings_backend="auto"` starts resolving to the real local
+    `bge-small-en-v1.5` model instead of the zero-dependency `HashEmbedder`
+    fallback, or explicitly setting `MYTHIC_EMBEDDINGS_BACKEND=fastembed`).
+    `IndexStore` detects the embedder identity (`{ClassName}:{dim}`) changed
+    against what's stored in `meta.embedder_id` and automatically wipes and
+    rebuilds every vector from scratch on the next `reindex` -- no separate
+    migration tool is needed, and nothing but vectors is ever discarded
+    (page/FTS content is always re-derived from `wiki/` on disk).
     """
     root = Path(vault_path) if vault_path is not None else Path.cwd()
     settings = load_settings(root)
@@ -143,6 +154,106 @@ def reindex(
         f"[green]Reindexed:[/green] +{report.added} added, "
         f"~{report.updated} updated, -{report.deleted} deleted, "
         f"{report.unchanged} unchanged"
+    )
+
+
+@app.command("index-graph")
+def index_graph(
+    vault_path: Optional[Path] = typer.Option(
+        None, "--vault", help="Vault whose GraphRAG data layer to sync (defaults to the current directory)."
+    ),
+    max_gleanings: int = typer.Option(
+        1, "--max-gleanings", help="Max bounded 'did you miss any?' recall-loop rounds per text unit."
+    ),
+) -> None:
+    """Build/sync the GraphRAG entity/relationship/claim knowledge graph (Phase 3).
+
+    Chunks every RAW ingested source document (`raw/`, NOT the compiled
+    `wiki/` summary pages) into text units, extracts entities/relationships/
+    claims via the configured LLM provider (AuthHub by default; requires
+    AUTHHUB_API_KEY, or a fully-local Ollama run via `local: true`) using
+    prompted delimited-tuple output, and persists them alongside the
+    existing SQLite hybrid-search sidecar. Incremental: only text units
+    whose content changed since the last run are re-extracted (cached via
+    `llm_cache`, so an unchanged vault costs zero LLM calls).
+
+    A real LLM-cost operation (unlike `reindex`) -- this is why it stays a
+    separate, explicit command rather than folded into `ingest`; the web
+    UI's "Build Knowledge Graph" action and its optional
+    "auto-build after ingest" Settings toggle (off by default) call this
+    exact same `reindex_graph` machinery. Imports the extraction client
+    lazily so the rest of the CLI never requires it. Was previously hidden
+    from `--help` while orphaned (no UI entry point ever called it); now a
+    documented, supported, UI-discoverable operation.
+    """
+    root = Path(vault_path) if vault_path is not None else Path.cwd()
+    settings = load_settings(root)
+    embedder = get_embedder(settings)
+
+    from mythic_proportion.graph.extract import ExtractionError
+    from mythic_proportion.graph.index import GraphExtractionSetupError, build_extraction_client, reindex_graph
+
+    try:
+        client = build_extraction_client(settings)
+    except GraphExtractionSetupError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    with IndexStore(root, embedder) as store:
+        store.reindex(root)
+        try:
+            report = reindex_graph(
+                root,
+                store.conn,
+                extraction_client=client,
+                embedder=embedder,
+                vec_active=store.vec_active,
+                model=settings.llm_model,
+                max_gleanings=max_gleanings,
+            )
+        except ExtractionError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
+        # Phase 4: recompute the whole-graph Leiden clustering + community
+        # reports on every `index-graph` run (cheap at personal-vault scale,
+        # per specs/ROADMAP-BRIEF.md §6.2) -- never blocks graph-layer sync
+        # if the optional `[graphrag]` extra (or its leidenalg fallback)
+        # isn't installed; that failure is reported, not fatal. The
+        # `except ImportError` below is scoped to *only* `compute_communities`
+        # (the one call that lazily imports graspologic/leidenalg) -- it
+        # deliberately does NOT wrap `generate_community_reports`, so any
+        # unrelated ImportError raised during report generation propagates
+        # as a real failure instead of being misreported as "optional
+        # clustering backend absent".
+        from mythic_proportion.graph.communities import compute_communities
+        from mythic_proportion.graph.reports import generate_community_reports
+
+        try:
+            community_report = compute_communities(store.conn)
+        except ImportError as exc:
+            console.print(f"[yellow]Skipping community/report generation:[/yellow] {exc}")
+        else:
+            reports_report = generate_community_reports(
+                store.conn,
+                client=client,
+                model=settings.llm_model,
+                embedder=embedder,
+                vec_active=store.vec_active,
+            )
+            console.print(
+                f"[green]Communities:[/green] {community_report.rows_written} membership row(s) "
+                f"across {community_report.levels} level(s) ({community_report.backend}); "
+                f"{reports_report.reports_written} report(s) written, "
+                f"{reports_report.llm_calls} LLM call(s)"
+            )
+
+    console.print(
+        f"[green]Graph reindexed:[/green] +{report.text_units_added} text unit(s), "
+        f"~{report.text_units_updated} updated, -{report.text_units_deleted} deleted, "
+        f"{report.entities_upserted} entit(y/ies) upserted, "
+        f"{report.relationships_upserted} relationship(s), {report.claims_upserted} claim(s), "
+        f"{report.llm_calls} LLM call(s)"
     )
 
 
@@ -163,6 +274,14 @@ def query(
         ),
     ),
     k: int = typer.Option(8, "-k", "--k", help="Number of pages to retrieve."),
+    mode: str = typer.Option(
+        "auto",
+        "--mode",
+        help=(
+            "Retrieval mode: auto (default, preserves legacy behavior until the "
+            "graph layer has data) | legacy | global | local | drift | activation."
+        ),
+    ),
 ) -> None:
     """Answer a question by retrieving and synthesizing from the vault."""
     root = Path(vault_path) if vault_path is not None else Path.cwd()
@@ -174,8 +293,8 @@ def query(
         raise typer.Exit(code=1)
 
     try:
-        answer = answer_query(root, question, k=k, use_llm=True)
-    except AnswerError as exc:
+        answer = answer_query(root, question, k=k, use_llm=True, mode=mode)
+    except (AnswerError, ValueError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
 

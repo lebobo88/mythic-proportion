@@ -132,7 +132,10 @@ th { background: var(--surface-2); }
   <dl>
     <dt>created</dt><dd>2026-07-11</dd>
     <dt>modified</dt><dd>2026-07-11 (initial)</dd>
-    <dt>commits</dt><dd>— (none yet; Phase 0 mints the baseline)</dd>
+    <dt>modified</dt><dd>2026-07-11 — Phase 0 complete (dual public repos live, 159 tests green, scaffold Chrome-validated)</dd>
+    <dt>commits</dt><dd>mythic-proportion: <code>f15584c</code> baseline (main) · <code>813b532</code> feat(p0) scaffold (feat/3d-graphrag)</dd>
+    <dt>commits</dt><dd>FABLE-HARNESS: <code>75a27c1</code> baseline (main)</dd>
+    <dt>repos</dt><dd>github.com/lebobo88/mythic-proportion · github.com/lebobo88/fable-harness (both public)</dd>
     <dt>agent</dt><dd>plan-deep (Fable-5)</dd>
     <dt>session</dt><dd>8fea15c0-a3df-4e5e-8ea4-a5b47dc27334</dd>
     <dt>back refs</dt><dd><code>mythic-proportion/specs/ROADMAP-BRIEF.md</code> (grounding brief + 6 cited research threads) · <code>mythic-proportion/specs/mythic-proportion.html</code> (prior build plan) · <code>mythic-proportion/…Technical Architecture Blueprint.md</code></dd>
@@ -224,7 +227,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 0 ===== -->
   <div class="phase">
-    <h3>Phase 0 — Dual-repo git + greenfield scaffold <code class="status" data-st="wip">[wip]</code></h3>
+    <h3>Phase 0 — Dual-repo git + greenfield scaffold <code class="status" data-st="x">[x]</code></h3>
     <p>Stand up version control and the greenfield skeleton. Two <b>separate public</b> repositories: <code>mythic-proportion/</code> and the enclosing <code>H:\FABLE-HARNESS</code>. FABLE-HARNESS <code>.gitignore</code> excludes <code>mythic-proportion/</code> so the trees never nest; a README link references it as a sibling. Scaffold the target layout (Python sub-packages + a <code>web/</code> Vite workspace served by FastAPI) on a <code>feat/3d-graphrag</code> branch off <code>mythic-proportion</code>'s <code>main</code>. Freeze the behavior-parity checklist as the acceptance contract for P2.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -253,7 +256,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 1 ===== -->
   <div class="phase">
-    <h3>Phase 1 — Design-system foundation <code class="status">[]</code></h3>
+    <h3>Phase 1 — Design-system foundation <code class="status" data-st="x">[x]</code></h3>
     <p>Build the ground-up design system before feature UI, so every later view consumes tokens rather than hard-coded values. Three-tier OKLCH CSS variables (primitive → semantic → component) including a dedicated <code>--graph-*</code> family that the 3D scene will read at runtime; shadcn/ui components (Base UI or Radix primitives); a Cmd+K command-palette navigation spine; motion tokens; light/dark theming. Dispatch <code>designer</code> + <code>design-system-curator</code> for the token/component specs, <code>engineer</code> to implement.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -281,7 +284,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 2 ===== -->
   <div class="phase">
-    <h3>Phase 2 — Core rebuild + data migration + parity gate <code class="status">[]</code></h3>
+    <h3>Phase 2 — Core rebuild + data migration + parity gate <code class="status" data-st="x">[x]</code></h3>
     <p>Re-establish the full existing feature set (ingest/compile/index/query/lint/watch/serve) on the clean greenfield structure, then migrate the existing vault + SQLite index across, and prove behavior parity against the P0 checklist before anything new is added. This is the riskiest phase of a greenfield rebuild — it exists to guarantee nothing the 102-test app does is silently lost.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -307,7 +310,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 3 ===== -->
   <div class="phase">
-    <h3>Phase 3 — GraphRAG data layer <code class="status">[]</code></h3>
+    <h3>Phase 3 — GraphRAG data layer <code class="status" data-st="x">[x]</code></h3>
     <p>Add the semantic-graph substrate. New SQLite tables coexisting with <code>pages/pages_fts/page_vectors</code>; entity/relationship/claim extraction via GraphRAG-style prompted <b>delimited tuples</b> (more drift-robust than nested JSON) with a gleaning recall loop; an <code>llm_cache</code> keyed on <code>sha256(prompt||model)</code> for idempotent, incremental re-indexing. Borrow MS GraphRAG's MIT prompt text; hand-roll the orchestration. Dispatch <code>data-modeler</code> for the schema, <code>engineer</code> for extraction, <code>security-reviewer</code> for the prompt-injection surface of ingested content.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -334,7 +337,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 4 ===== -->
   <div class="phase">
-    <h3>Phase 4 — Communities + retrieval modes <code class="status">[]</code></h3>
+    <h3>Phase 4 — Communities + retrieval modes <code class="status" data-st="x">[x]</code></h3>
     <p>Turn the graph into a retrieval engine. graspologic hierarchical Leiden clustering (pinned seed for stable IDs) into <code>communities</code>; LLM-written <code>community_reports</code> (cached by community content-hash); and the four GraphRAG query modes plus query-aware spreading-activation, all expressed over sqlite-vec + FTS5 + recursive CTEs. Wire the Ask view to choose a mode. Dispatch <code>security-reviewer</code> for the concurrency/data-integrity of graph writes during re-cluster.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -360,7 +363,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 5 ===== -->
   <div class="phase">
-    <h3>Phase 5 — 3D graph frontend (~50k target) <code class="status">[]</code></h3>
+    <h3>Phase 5 — 3D graph frontend (~50k target) <code class="status" data-st="x">[x]</code></h3>
     <p>The centerpiece. <code>r3f-forcegraph</code> drives the force simulation and data plumbing (R3F keeps the render loop via <code>tickFrame()</code>), but nodes render through a <b>custom <code>InstancedMesh2</code> layer</b> (points-as-nodes, LOD tiers, per-instance BVH frustum-culling, GPU picking) — designed for ~50k nodes at 60fps from day one, not retrofitted. Worker-frozen layout, batched line edges with degree-based culling, SDF labels only for hovered/selected/high-degree nodes, community hulls, hover-neighbor highlight+fade, eased camera focus, filters, progressive disclosure, a 2D fallback mode, and an accessible parallel shadow-DOM.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -389,7 +392,7 @@ th { background: var(--surface-2); }
 
   <!-- ===== Phase 6 ===== -->
   <div class="phase">
-    <h3>Phase 6 — Local privacy layer <code class="status">[]</code></h3>
+    <h3>Phase 6 — Local privacy layer <code class="status" data-st="x">[x]</code></h3>
     <p>Make privacy the default for a personal second brain. Redact PII locally <i>before</i> any content reaches a cloud LLM (Microsoft Presidio as the framework, the OpenAI Privacy Filter wired as a custom recognizer), rehydrate PII into responses via Presidio's reversible map; flip default embeddings to local <code>bge-small-en-v1.5</code> (keep HashEmbedder fallback); add an optional fully-offline Ollama/Qwen2.5 provider selected by a per-vault <code>local: true</code> flag. Dispatch <code>security-reviewer</code> + <code>ai-controls-author</code> for the data-classification and redaction-completeness review.</p>
     <h4>Tasks</h4>
     <ul class="checklist">
@@ -560,9 +563,38 @@ th { background: var(--surface-2); }
 
 <section id="amendments">
   <h2>Amendments</h2>
-  <details class="amend">
-    <summary>— no amendments yet</summary>
+  <details class="amend" open>
+    <summary>8 amendments</summary>
     <p>Append-only post-execution change history (newest at the bottom). Never rewrite history — only add.</p>
+    <ul>
+      <li><b>2026-07-11 — Phase 0 complete (direct build via typed <code>engineer</code> + <code>verifier</code>).</b>
+        Dual git repos initialized; <code>mythic-proportion</code> (<code>f15584c</code> baseline on <code>main</code>, <code>813b532</code> scaffold on <code>feat/3d-graphrag</code>) and <code>FABLE-HARNESS</code> (<code>75a27c1</code> on <code>main</code>, gitignoring <code>mythic-proportion/</code>). Python sub-packages + declared-only extras (base unaffected); <code>web/</code> Vite+React+R3F workspace building to <code>static_next/</code>; FastAPI <code>/app</code> mount added (legacy <code>/</code> preserved — parity). <b>159 tests green</b> (documented 102 was stale). <code>verifier</code> verdict: <b>pass</b> (7/7 re-derived from disk). Secret-scan clean. Both repos pushed <b>public</b> (github.com/lebobo88/mythic-proportion, github.com/lebobo88/fable-harness). Live Chrome validation of <code>/app</code>: scaffold renders, zero console errors. <b>Decision:</b> P1–P10 execute via the <code>/run</code> lifecycle (per user).</li>
+      <li><b>2026-07-11 — Phase 1 complete (via <code>/run</code> lifecycle, run <code>20260711-141439-p1-design-system</code>).</b>
+        20 typed agents; taxonomy mapped to §4.4/§4.8/§4.10/§4.13; a <b>cross-vendor Codex review</b> ran on the designer stage. Implemented + committed <code>9162a12</code> on <code>feat/3d-graphrag</code>: three-tier OKLCH tokens (<code>primitives/semantic/components/graph/motion.css</code>) incl. the <code>--graph-*</code> family + a <code>graph-colors.ts</code> THREE.Color runtime bridge; motion tokens (reduced-motion-gated); shadcn-style primitives (Button/Input/Dialog/Combobox/Tooltip); app shell (Header/TabNav/ThemeToggle); Cmd+K command palette; light/dark theming; <code>/design</code> preview route.
+        <b>Independent verification (from disk, not the run's self-report):</b> <code>tsc -b &amp;&amp; vite build</code> compiles (296 modules → <code>static_next</code>); vitest <b>21/21</b>; Python <b>159/159</b>; live Chrome: shell renders, dark/light toggle works, Cmd+K palette (NAVIGATE + PAGES) works, zero console errors.
+        <b>⚠ Governance caveat:</b> the run auto-reported <code>status: surfaced</code> with §4.8/§4.10/§4.13 <code>reject</code> + missability <code>reject</code> — a <b>plumbing false-negative</b>: the section producers didn't persist <code>.fable/&lt;run&gt;/stages/*.json</code>, so <code>verifier</code> fail-closed per N4 and missability mis-read "no artifacts" though artifacts + code clearly exist. Phase accepted on independent disk evidence. This stages-file gap will recur on P2–P10 unless addressed.</li>
+      <li><b>2026-07-11 — <code>/run</code> plumbing bug fixed (fable-harness <code>d084e6e</code>).</b>
+        Root-caused via <code>meta-agent</code> + diff-reviewed: run.js now has the producer initialize <code>stages/&lt;stage&gt;.json</code> at generate time, the judge persist <code>verdicts/&lt;stage&gt;.json</code> (same-tier + cross-vendor), code stages emit a <code>&lt;stage&gt;-summary.md</code> with the verifier re-deriving from git/build/tests, a RECORD-ONLY <code>reflexion-coach</code> terminal step stamp <code>last_verdict</code> (verifier stays read-only), and missability get the explicit run path. Invariant recorded. Residual: same-tier judge still dispatched untyped (latent N7) — follow-up.</li>
+      <li><b>2026-07-11 — Phase 2 complete (via <code>/run</code> run <code>20260711-150129-p2-core-views-parity</code> + direct debt-closure).</b>
+        The fixed <code>/run</code> ran 53 agents across §4.3/4.4/4.6/4.7/4.8/4.9/4.10/4.11/4.13 and — critically — <b>reported truthfully</b>: it wrote real <code>stages/*.json</code> (e.g. <code>4.8-engineer.json → last_verdict:"pass-with-notes"</code>), the engineer stage <b>passed</b> (vs. the pre-fix false reject), and missability gave <b>substantive findings</b> (not "no artifacts"). Commit <code>c57e641</code> shipped the seven React views on the P1 design system (<code>web/src/routes/{wiki,search,ask,graph,ingest,lint,settings}/*View.tsx</code>), wired to the existing <code>/api/*</code>, legacy <code>/</code> preserved.
+        <b>Debt closed</b> (per user "close everything") by three typed producers: <code>engineer</code> added per-view Vitest tests + a legacy-parity suite (<b>vitest 21 → 53</b>); <code>security-reviewer</code> wrote <code>docs/security/{threat-model,control-matrix,data-classification,sbom}.md</code>; <code>docs-author</code> wrote <code>docs/{CHANGELOG,frontend}.md</code>.
+        <b>Independent verification:</b> vitest <b>53/53</b>, <code>npm run build</code> OK, Python <b>159/159</b>, live Chrome: Wiki (empty-state graceful) + Settings (real <code>/api/config</code>+<code>/api/models</code> data, no key field) render, zero console errors.
+        <b>Tracked follow-ups</b> (documented, deferred to their phases): unredacted cloud-LLM egress → P6; CORS/CSRF on state-changing <code>/api/*</code> + upload size cap → security hardening; audit trails/correlation-IDs → P8 MCP.</li>
+      <li><b>2026-07-11 — Phase 3 complete (via <code>/run</code> run <code>20260711-161002-p3-graphrag-data-layer</code> + dedup fix).</b>
+        The fixed <code>/run</code> reported <b>truthfully</b>: missability <b>PASS</b>, 6/7 <code>pass-with-notes</code>, and exactly ONE real <b>cross-vendor (Codex) reject</b> (§4.5 data-modeler) that caught a genuine relationship-dedup gap. Shipped <code>aa169ed</code> (GraphRAG data layer) + <code>c00e398</code> (self-caught <code>/api/graph?mode</code> index-wipe fix): full <code>graph/</code> package (chunk/extract/tuples/claims/cache/store/index), all GraphRAG tables + <code>llm_cache</code> in schema.sql, delimited-tuple extraction (fence-strip + balanced-scan + repair round-trip + skip-not-abort + title-normalize dedup + constrained-type enum + gleaning), local text-unit embeddings, cache-based idempotency + incremental re-index + ref-count orphan-GC, and <code>/api/graph?mode=entities|both</code> (legacy shape preserved as default). <b>pytest 159 → 200</b> (+41).
+        <b>Dedup fix</b> (<code>2d0b303</code>, closing the Codex finding): <code>UNIQUE INDEX idx_relationships_identity(source_id,target_id,type)</code> + <code>upsert_relationship</code> now <code>ON CONFLICT … DO UPDATE</code> merges (max weight, non-empty description) → duplicate edges impossible before Phase 4's weighted retrieval. pytest → <b>201</b>. Independently verified from disk (pytest 201, index + ON CONFLICT present, build OK).</li>
+      <li><b>2026-07-11 — Phase 4 complete (via <code>/run</code> run <code>20260711-171451-p4-communities-retrieval</code> + mode-contract fix).</b>
+        Shipped <code>ab5edb7</code> + <code>f1ee361</code>: <code>graph/communities.py</code> (hierarchical Leiden via <b>graspologic</b>, pinned seed, transactional <code>replace_communities</code>), <code>graph/reports.py</code> (cached community reports), and <code>query/modes.py</code> — all four retrieval modes (GLOBAL map-reduce, LOCAL recursive-CTE expand, DRIFT primer→local, spreading-activation weighted BFS) wired into mode-aware <code>answer_query</code> + <code>/api/query</code> + the Ask view dropdown. <b>pytest 201 → 244.</b> The fixed <code>/run</code>'s cross-vendor (Codex) review did real work: <code>api-designer</code> corrected an overstated <code>/api/query</code> backward-compat claim (recorded as a superseding invariant), and it caught a genuine committed-code contract bug.
+        <b>Mode-contract fix</b> (<code>ace9492</code>): <code>QueryRequest.mode</code> was defaulting to <code>"auto"</code> with state-dependent resolution — a request omitting <code>mode</code> would silently switch to GraphRAG once communities exist, breaking existing callers. Fixed to <code>mode: str | None = None</code>; omitting <code>mode</code> now returns the <b>exact legacy 5-key shape unconditionally</b> (regression-tested even with graph data present); explicit <code>mode</code> surfaces <code>mode</code>/<code>mode_detail</code>/<code>source_kind</code>. <b>pytest → 247</b>, vitest 55, build OK. Independently verified from disk. The other 4 rejects were ephemeral <code>.fable/</code> doc/design-artifact inconsistencies (gitignored, no repo impact). <b>Follow-ups:</b> narrow single-user re-cluster/report concurrency race (documented, accepted); <code>docs/</code> api-docs will be regenerated when the docs phase runs.</li>
+      <li><b>2026-07-11 — Phase 5 complete (via <code>/run</code> run <code>20260711-183729-p5-3d-graph-frontend</code> + a live-Chrome-driven 3D hardening pass).</b>
+        Shipped <code>eef4312</code>+<code>62be3c7</code>: the 3D WebGL knowledge graph on React Three Fiber — <code>Graph3DScene</code> + <code>InstancedNodes</code> (@three.ez/instanced-mesh) + <code>InstancedEdges</code> + <code>CommunityHulls</code> + <code>CameraRig</code> + Web-Worker <code>forceLayout.worker.ts</code>, a <code>Graph2DFallback</code>, an a11y parallel DOM (<code>GraphA11yTree</code>), auto WebGL-context-loss→2D fallback, and a dev-only synthetic loader. <b>vitest 55→87.</b>
+        <b>Live Chrome validation caught real 3D-quality defects the tests + 2D fallback masked</b> — uncolored tiny nodes, no camera framing, and WebGL context-loss at 10k. A focused hardening pass (<code>c5307e7</code>) fixed all: per-instance community colors (root cause: <code>vertexColors:true</code> fighting InstancedMesh2's color texture) + degree sizing; camera fit-to-graph on layout settle (+ OrbitControls target); <b>progressive-disclosure default (1500-node GPU cap; physics still simulates the full set off-thread)</b> — the real context-loss cause was GPU mesh capacity = full node count; label cap (40); zero-allocation tick (reused Float32Array). <b>vitest 87→96, pytest 247, build OK.</b> <b>Re-validated live in Chrome at 10k: 3D holds context, nodes community-colored + sized, camera frames the graph, edges + hulls render.</b> Lesson reinforced: tests+2D-fallback pass ≠ the 3D scene is right — drive the actual WebGL scene in Chrome.</li>
+      <li><b>2026-07-11 — Phase 6 complete (via <code>/run</code> run <code>20260711-202730-p6-privacy-layer</code> + a from-disk verification pass + a focused close-out commit).</b>
+        Shipped <code>0903f4f</code>+<code>6997fa4</code>+<code>5a6d559</code>: <code>privacy/redact.py</code> (Presidio analyzer+anonymizer + OpenAI-Privacy-Filter recognizer, reversible rehydrate map, fail-closed <code>get_redactor()</code>) wrapping the outbound edge of every LLM call path (not just default-client construction — an injected-client redaction bypass found in round 1 was closed in <code>6997fa4</code>); default embedder → <code>bge-small-en-v1.5</code> via fastembed (<code>HashEmbedder</code> fallback preserved); <code>llm/ollama.py</code> (real OpenAI-compatible client, structured-outputs JSON extraction, loopback-only); a per-vault <code>local: true</code> provider selector; a Settings view exposing provider/model/redaction/local-mode. <b>pytest 247 → 316, vitest 96 → 103,</b> build OK.
+        <b>⚠ Governance caveat:</b> the run auto-reported <code>status: surfaced</code> with 8 stage rejects. An independent from-disk verification pass (not the run's self-report) found: 4 of 8 were stale/false-negative summaries traceable to a <code>.fable/</code> artifact-directory split (a codex-review path-resolution bug wrote some artifacts under <code>mythic-proportion/.fable/</code> instead of the canonical <code>FABLE-HARNESS/.fable/</code> root, causing the cross-vendor judge to see "no artifacts" on an already-passing stage); 1 (4.8 engineer) was Codex hitting its usage quota mid-run (zero analysis produced, correctly fail-closed to reject per N4 rather than a real defect — the underlying redaction-bypass finding it flagged was independently confirmed already fixed in <code>6997fa4</code> by direct code read); 3 were genuine narrow gaps (RFC-2119 spec wording, an ADR-0005 egress-boundary overclaim, a release-plan mechanism-description error) plus one missability item (a Settings a11y audit artifact), none requiring changes to <code>privacy/redact.py</code> or <code>llm/ollama.py</code>.
+        <b>Close-out fix</b> (<code>5a6d559</code>): reworded the 4 spec requirements to explicit MUST/MUST NOT + gave NFR-1's latency budget a concrete measurement protocol; corrected ADR-0005's egress-boundary claims and — since it surfaced a genuine dead computation — <b>enforced</b> <code>effective_allow_egress = allow_egress AND NOT local</code> at the <code>local:false</code> cloud-provider branches of <code>query/engine.py</code> and <code>compile/pipeline.py</code> (previously defined but never consulted; <code>Settings.allow_egress</code> default flipped <code>False→True</code> to preserve pre-existing default cloud-reachability, since enforcement is what's new); fixed the release-plan's "mutated in place" → "reassigned via <code>model_copy(update=...)</code>" wording; added a <code>prefers-reduced-motion</code> override for the Settings toggle transition and a full 8-state Settings a11y audit artifact. <b>pytest 316/0 skipped, vitest 103/103,</b> build OK.
+        <b>Independent live-Chrome verification:</b> Settings view functional (provider dropdown, local-mode checkbox correctly reveals Ollama model/URL fields, redaction checkbox, Save/Save-Ollama-settings), Ask flow confirms the <code>/api/query</code> mode-omitted legacy contract ("Default (legacy, no mode sent)" in the UI dropdown), a PII-laden Ask degrades cleanly on a missing-API-key error without leaking the raw question into the UI, zero console errors across Wiki/Ask/Settings. AuthHub cloud path not live-smoke-tested this session (no <code>AUTHHUB_API_KEY</code> loaded into the server process); Ollama not installed in this environment, so its structured-outputs path is verified by direct code read + mocked tests only, not a live local-model smoke test. Lesson reinforced: a run's self-reported <code>surfaced</code>/reject verdicts can themselves be wrong (infra flakiness, stale summaries) — re-derive from disk and Chrome before accepting or rejecting a phase.</li>
+    </ul>
   </details>
 </section>
 

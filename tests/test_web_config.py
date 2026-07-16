@@ -180,6 +180,174 @@ def test_get_models_failure_path_returns_200_with_empty_list(tmp_path: Path, mon
     assert "gateway unreachable" in data["error"]
 
 
+# --------------------------------------------------------------------------
+# Phase 6: local / redaction / ollama config surface
+# --------------------------------------------------------------------------
+
+
+def test_get_config_exposes_phase6_defaults(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    data = client.get("/api/config").json()
+    assert data["local"] is False
+    assert data["redaction_enabled"] is True
+    assert data["ollama_base_url"] == "http://localhost:11434"
+    assert data["ollama_model"] == "qwen2.5:7b-instruct"
+    assert data["embeddings_backend"] == "auto"
+    # Bugfix DEFECT 1 addition: off by default (real LLM-cost concern).
+    assert data["auto_build_graph"] is False
+
+
+def test_post_config_updates_auto_build_graph_toggle(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/config", json={"auto_build_graph": True})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["auto_build_graph"] is True
+
+    # And back off -- omitting the field on a later request leaves it
+    # untouched (matches every other Phase 6 toggle's contract).
+    response = client.post("/api/config", json={"model": "some-other-model"})
+    assert response.json()["auto_build_graph"] is True
+
+
+def test_post_config_updates_local_and_redaction_flags(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/config", json={"local": True, "redaction_enabled": False})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["local"] is True
+    assert data["redaction_enabled"] is False
+    # `local: true` never needs a cloud credential -- has_api_key reports True.
+    assert data["has_api_key"] is True
+
+
+def test_post_config_updates_ollama_provider_and_model(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post(
+        "/api/config", json={"provider": "ollama", "ollama_model": "qwen2.5:7b-instruct", "ollama_base_url": "http://localhost:11434"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["provider"] == "ollama"
+    assert data["ollama_model"] == "qwen2.5:7b-instruct"
+
+
+def test_post_config_rejects_empty_ollama_model(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/config", json={"ollama_model": "   "})
+    assert response.status_code == 422
+
+
+def test_post_config_rejects_non_loopback_ollama_base_url_under_local_true(tmp_path: Path) -> None:
+    """Closes a prior review finding: `local: true` with a remote
+    `ollama_base_url` must be rejected at config-set time, not silently
+    accepted (which would let a local-mode vault egress prompts off-host)."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post(
+        "/api/config", json={"local": True, "ollama_base_url": "http://evil.example.com:11434"}
+    )
+    assert response.status_code == 422
+    assert "loopback" in response.json()["detail"]
+
+    # The rejected update must not have been applied.
+    current = client.get("/api/config").json()
+    assert current["local"] is False
+    assert current["ollama_base_url"] == "http://localhost:11434"
+
+
+def test_post_config_rejects_non_loopback_ollama_base_url_under_provider_ollama_without_local(
+    tmp_path: Path,
+) -> None:
+    """Retry fix (closes a second prior review finding): the original check
+    only validated loopback-ness when ``local`` was true, so
+    ``provider="ollama", local=False`` could persist a non-loopback
+    ``ollama_base_url`` -- e.g. `compile.pipeline`/`query.engine`'s
+    `_default_client` factories route to Ollama whenever
+    ``settings.local or settings.llm_provider == "ollama"``, so this
+    combination was never a real network-egress bypass (the client's own
+    constructor still enforces loopback), but it left a stale, invalid
+    ``ollama_base_url`` sitting in config -- exactly the invariant this
+    config-time check exists to close. Now validated whenever *either*
+    ``local`` or ``llm_provider`` resolves to Ollama."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post(
+        "/api/config",
+        json={"provider": "ollama", "ollama_base_url": "http://evil.example.com:11434"},
+    )
+    assert response.status_code == 422
+    assert "loopback" in response.json()["detail"]
+
+    # The rejected update must not have been applied.
+    current = client.get("/api/config").json()
+    assert current["provider"] != "ollama" or current["ollama_base_url"] == "http://localhost:11434"
+    assert current["ollama_base_url"] == "http://localhost:11434"
+
+
+def test_post_config_rejects_switching_provider_to_ollama_with_an_already_remote_url(tmp_path: Path) -> None:
+    """Counterpart of the `local=True` "already remote" case above, for
+    `provider="ollama"`: validation is against the *effective* post-update
+    state, not just fields present in this specific request body."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    # First: only stage a remote ollama_base_url (provider left at its
+    # default, not "ollama" yet -- allowed).
+    r1 = client.post("/api/config", json={"ollama_base_url": "http://remote-ollama.example.com:11434"})
+    assert r1.status_code == 200
+
+    # Then: switching provider to "ollama" with that URL already in effect
+    # must fail.
+    r2 = client.post("/api/config", json={"provider": "ollama"})
+    assert r2.status_code == 422
+    assert "loopback" in r2.json()["detail"]
+    assert client.get("/api/config").json()["provider"] != "ollama"
+
+
+def test_post_config_rejects_switching_local_true_to_an_already_remote_url(tmp_path: Path) -> None:
+    """Setting `local: true` while an already-stored `ollama_base_url` is
+    remote (set in an earlier, separate request) must also be rejected --
+    the check is against the *effective* post-update state, not just fields
+    present in the current request body."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    # First: only stage a remote ollama_base_url (local left False --
+    # allowed, since `local` isn't true yet).
+    r1 = client.post("/api/config", json={"ollama_base_url": "http://remote-ollama.example.com:11434"})
+    assert r1.status_code == 200
+
+    # Then: flipping `local` to True with that URL already in effect must fail.
+    r2 = client.post("/api/config", json={"local": True})
+    assert r2.status_code == 422
+    assert "loopback" in r2.json()["detail"]
+    assert client.get("/api/config").json()["local"] is False
+
+
+def test_post_config_accepts_local_true_with_loopback_url(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post(
+        "/api/config", json={"local": True, "ollama_base_url": "http://127.0.0.1:11434"}
+    )
+    assert response.status_code == 200
+    assert response.json()["local"] is True
+
+
 def test_get_models_without_api_key_falls_back_to_empty_list(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
     vault = _seed_vault(tmp_path)

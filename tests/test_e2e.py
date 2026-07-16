@@ -95,7 +95,17 @@ def test_cold_start_e2e_init_ingest_reindex_query_lint(tmp_path: Path, monkeypat
     assert kinds["settings.json"] == "artifact"
 
     # 4. compile each ingested source with a FakeCompileClient (no API key needed)
-    settings = load_settings(vault)
+    #
+    # Redaction is on by default and, with [privacy]/[privacy-full] installed
+    # in this dev environment, building a real default Redactor() loads an
+    # actual local transformer pipeline (multi-second). Retry fix:
+    # compile_source/answer_query now apply get_redactor() uniformly to
+    # every active client, including one injected via `client=` (closing the
+    # fail-closed bypass a prior review found) -- this e2e test exercises
+    # the ingest/compile/query/lint pipeline mechanics, not privacy, so it
+    # explicitly opts out here. Dedicated redaction-behavior coverage lives
+    # in test_privacy_redact.py.
+    settings = load_settings(vault).model_copy(update={"redaction_enabled": False})
     client = FakeCompileClient(_fixture_pages_for)
     for source in ingest_report.ingested:
         compile_result = compile_source(vault, source, client=client, settings=settings)
@@ -117,8 +127,16 @@ def test_cold_start_e2e_init_ingest_reindex_query_lint(tmp_path: Path, monkeypat
     def _fixture(prompt) -> AnswerResult:
         return AnswerResult(text="Hybrid retrieval synthesized answer.", citations=list(prompt.hit_titles[:1]))
 
-    def _query_with_fake_client(root, question, *, k=8, use_llm=True):  # noqa: ANN001
-        return real_answer_query(root, question, k=k, use_llm=use_llm, client=FakeAnswerClient(_fixture))
+    def _query_with_fake_client(root, question, *, k=8, use_llm=True, mode="auto"):  # noqa: ANN001
+        return real_answer_query(
+            root,
+            question,
+            k=k,
+            use_llm=use_llm,
+            mode=mode,
+            client=FakeAnswerClient(_fixture),
+            settings=load_settings(root).model_copy(update={"redaction_enabled": False}),
+        )
 
     monkeypatch.setattr(cli_app_module, "answer_query", _query_with_fake_client)
     result = runner.invoke(

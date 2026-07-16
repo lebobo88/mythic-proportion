@@ -1,0 +1,11 @@
+/*
+ * Design-system entry point. Import order matters: primitives before
+ * semantic before component tokens before motion/graph before the base
+ * element reset, so later tiers can reference earlier ones.
+ */
+@import "./tokens/primitives.css";
+@import "./tokens/semantic.css";
+@import "./tokens/components.css";
+@import "./tokens/motion.css";
+@import "./tokens/graph.css";
+@import "./base.css";

@@ -16,10 +16,14 @@ fastapi = pytest.importorskip("fastapi")
 
 from mythic_proportion.compile.models import WikiPage  # noqa: E402
 from mythic_proportion.compile.writer import write_page  # noqa: E402
+from mythic_proportion.graph.extract import FakeExtractionClient  # noqa: E402
+from mythic_proportion.graph.index import reindex_graph  # noqa: E402
+from mythic_proportion.graph.tuples import COMPLETION_DELIM, TUPLE_DELIM  # noqa: E402
 from mythic_proportion.index.embeddings import HashEmbedder  # noqa: E402
 from mythic_proportion.index.store import IndexStore  # noqa: E402
 from mythic_proportion.vault.init import init_vault  # noqa: E402
 from mythic_proportion.web.app import create_app  # noqa: E402
+from mythic_proportion.web.pages import collect_pages  # noqa: E402
 from mythic_proportion.web.render import render_snippet_html  # noqa: E402
 
 
@@ -216,6 +220,7 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     client injection, so this drives ``answer_query`` directly (the same
     function `/api/query` calls) to prove the synthesis contract, and
     separately checks the endpoint's never-500 wrapper above."""
+    from mythic_proportion.config import Settings
     from mythic_proportion.query.client import AnswerResult, FakeAnswerClient
     from mythic_proportion.query.engine import answer_query
 
@@ -223,9 +228,77 @@ def test_api_query_with_injected_fake_client_synthesizes(tmp_path: Path) -> None
     client = FakeAnswerClient(
         AnswerResult(text="Hybrid retrieval blends BM25 and vectors [[Hybrid Retrieval]].", citations=[])
     )
-    answer = answer_query(vault, "how does hybrid retrieval work?", client=client)
+    # Redaction is on by default and, with [privacy]/[privacy-full] installed
+    # in this dev environment, building a real default Redactor() loads an
+    # actual local transformer pipeline (multi-second). This test exercises
+    # the synthesis contract, not privacy, so it explicitly opts out (see
+    # test_privacy_redact.py for dedicated redaction-behavior coverage).
+    answer = answer_query(
+        vault, "how does hybrid retrieval work?", client=client, settings=Settings(vault_path=vault, redaction_enabled=False)
+    )
     assert answer.used_llm is True
     assert "Hybrid Retrieval" in answer.citations
+
+
+def test_api_query_omitted_mode_returns_exact_legacy_shape_unconditionally(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CORRECTED per memory/invariants.md's "POST /api/query contract --
+    CORRECTION" entry: omitting `mode` entirely (every pre-Phase-4 caller)
+    must ALWAYS take the exact legacy path and return the exact legacy
+    5-key shape -- no `mode`/`mode_detail` keys, and no `source_kind` on
+    any hit -- unconditionally, never contingent on graph/communities
+    state."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "how does hybrid retrieval work?"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["used_llm"] is False
+    assert data["error"] is True
+    assert set(data.keys()) == {"text", "citations", "hits", "used_llm", "error"}
+    assert "mode" not in data
+    assert "mode_detail" not in data
+    for hit in data["hits"]:
+        assert "source_kind" not in hit
+
+
+def test_api_query_explicit_mode_surfaces_mode_and_source_kind(tmp_path: Path, monkeypatch) -> None:
+    """The counterpart to the omitted-mode test above: an explicit `mode`
+    key must surface `mode`/`mode_detail` in the response, and
+    `source_kind` on every hit."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "how does hybrid retrieval work?", "mode": "legacy"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["mode"] == "legacy"
+    assert "mode_detail" in data
+    for hit in data["hits"]:
+        assert hit["source_kind"] == "page"
+
+
+def test_api_query_unknown_mode_never_500s(tmp_path: Path) -> None:
+    """An invalid `mode` string must degrade gracefully (per the existing
+    never-500 contract), not crash the request."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/query", json={"question": "anything", "mode": "not-a-real-mode"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["error"] is True
+    # An explicit (even invalid) `mode` key still counts as "explicit" for
+    # response-shape purposes.
+    assert data["mode"] == "not-a-real-mode"
 
 
 def test_api_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
@@ -241,6 +314,166 @@ def test_api_graph_returns_nodes_and_edges(tmp_path: Path) -> None:
     assert data["edges"]
     for node in data["nodes"]:
         assert node["type"] == "concept"
+
+
+def _seed_entity_fixture_response(system: str, user: str, idx: int) -> str:
+    if "MANY entities" in user:
+        return COMPLETION_DELIM
+    if "Hybrid" in user or "hybrid" in user:
+        return (
+            '("entity"' + TUPLE_DELIM + "Hybrid Search" + TUPLE_DELIM + "CONCEPT" + TUPLE_DELIM
+            + "a retrieval technique)" + COMPLETION_DELIM
+        )
+    return COMPLETION_DELIM
+
+
+def test_api_graph_default_mode_is_unchanged_wikilink_shape(tmp_path: Path) -> None:
+    """Extending `/api/graph` with `mode` must not change the default response
+    at all (N9 preserved invariant) -- same query param omitted, same shape."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph")
+    assert response.status_code == 200
+    data = response.json()
+    for node in data["nodes"]:
+        assert set(node.keys()) == {"id", "label", "type"}
+    for edge in data["edges"]:
+        assert set(edge.keys()) == {"source", "target"}
+
+
+def test_api_graph_mode_wikilinks_explicit_matches_default(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    default_response = client.get("/api/graph").json()
+    explicit_response = client.get("/api/graph", params={"mode": "wikilinks"}).json()
+    assert default_response == explicit_response
+
+
+def test_api_graph_mode_entities_returns_extracted_entity_graph(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+
+    llm_client = FakeExtractionClient(_seed_entity_fixture_response)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        # `reindex_graph` now defaults to `collect_raw_sources` (real `raw/`
+        # ingested documents), not `collect_pages` (`wiki/`) -- these tests
+        # only ever seeded `wiki/` pages directly (no real ingest run), so
+        # the wiki-derived page list is passed explicitly to preserve their
+        # original intent (extracting entities from the seeded wiki content).
+        reindex_graph(
+            vault,
+            store.conn,
+            extraction_client=llm_client,
+            embedder=store.embedder,
+            vec_active=store.vec_active,
+            model="mock",
+            max_gleanings=0,
+            pages=collect_pages(vault),
+        )
+
+    web_client = _client(vault)
+    response = web_client.get("/api/graph", params={"mode": "entities"})
+    assert response.status_code == 200
+    data = response.json()
+    assert any(node["label"] == "HYBRID SEARCH" and node["kind"] == "entity" for node in data["nodes"])
+
+
+def test_api_graph_mode_entities_is_empty_before_any_extraction_run(tmp_path: Path) -> None:
+    """No `mythic index-graph` run yet -- must be an empty (not erroring) entity graph."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph", params={"mode": "entities"})
+    assert response.status_code == 200
+    assert response.json() == {"nodes": [], "edges": []}
+
+
+def test_api_graph_mode_both_unions_pages_and_entities(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+
+    llm_client = FakeExtractionClient(_seed_entity_fixture_response)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        # `reindex_graph` now defaults to `collect_raw_sources` (real `raw/`
+        # ingested documents), not `collect_pages` (`wiki/`) -- these tests
+        # only ever seeded `wiki/` pages directly (no real ingest run), so
+        # the wiki-derived page list is passed explicitly to preserve their
+        # original intent (extracting entities from the seeded wiki content).
+        reindex_graph(
+            vault,
+            store.conn,
+            extraction_client=llm_client,
+            embedder=store.embedder,
+            vec_active=store.vec_active,
+            model="mock",
+            max_gleanings=0,
+            pages=collect_pages(vault),
+        )
+
+    web_client = _client(vault)
+    response = web_client.get("/api/graph", params={"mode": "both"})
+    assert response.status_code == 200
+    data = response.json()
+    kinds = {node["kind"] for node in data["nodes"]}
+    assert kinds == {"page", "entity"}
+
+
+def test_api_graph_rejects_invalid_mode(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/graph", params={"mode": "bogus"})
+    assert response.status_code == 422
+
+
+def test_api_graph_entities_mode_does_not_wipe_the_hybrid_search_index(tmp_path: Path) -> None:
+    """Regression for the reject-triggering defect: `GET /api/graph?mode=entities`
+    (and `mode=both`) must never touch `pages`/`pages_fts`/`page_vectors` or the
+    stored `embedder_id`, no matter how it opens `IndexStore` to read the
+    GraphRAG entity tables.
+
+    Before the fix, that read opened `IndexStore(vault_root, embedder=None)`,
+    which `_sync_embedder_meta` treated as an embedder-identity *change* against
+    a vault already indexed with a real embedder (`HashEmbedder:64`, the
+    `get_embedder` default for `Settings.embeddings_backend == "local"`) and
+    wiped `pages`/`pages_fts`/`page_vectors` (+ dropped `vec_pages`) as a side
+    effect of a single GET.
+    """
+    vault = _seed_vault(tmp_path)
+    # Re-seed with the *app's own default* embedder identity (HashEmbedder
+    # dim=64, matching `get_embedder(Settings())`) so the stored `embedder_id`
+    # is exactly what `create_app`'s default settings would produce -- the
+    # precise condition the reject repro needed to trigger the wipe.
+    with IndexStore(vault, HashEmbedder(dim=64), use_vec=False) as store:
+        store.reindex(vault)
+        conn = store.conn
+        pages_before = conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+        pages_fts_before = conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0]
+        page_vectors_before = conn.execute("SELECT COUNT(*) FROM page_vectors").fetchone()[0]
+        embedder_id_before = conn.execute(
+            "SELECT value FROM meta WHERE key = 'embedder_id'"
+        ).fetchone()[0]
+    assert pages_before > 0
+    assert pages_fts_before > 0
+    assert page_vectors_before > 0
+    assert embedder_id_before == "HashEmbedder:64"
+
+    client = _client(vault)
+    for mode in ("entities", "both"):
+        response = client.get("/api/graph", params={"mode": mode})
+        assert response.status_code == 200
+
+    with IndexStore(vault, HashEmbedder(dim=64), use_vec=False, sync_embedder=False) as store:
+        conn = store.conn
+        assert conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0] == pages_before
+        assert conn.execute("SELECT COUNT(*) FROM pages_fts").fetchone()[0] == pages_fts_before
+        assert conn.execute("SELECT COUNT(*) FROM page_vectors").fetchone()[0] == page_vectors_before
+        assert (
+            conn.execute("SELECT value FROM meta WHERE key = 'embedder_id'").fetchone()[0]
+            == embedder_id_before
+        )
 
 
 def test_api_lint_reports_clean_vault(tmp_path: Path) -> None:
@@ -299,6 +532,98 @@ def _wait_for_job(client: "fastapi.testclient.TestClient", job_id: str, *, timeo
             return data
         time.sleep(0.02)
     raise AssertionError(f"job {job_id} did not finish within {timeout}s: {data}")
+
+
+def _wait_for_graph_job(client: "fastapi.testclient.TestClient", job_id: str, *, timeout: float = 5.0) -> dict:
+    """Same contract as :func:`_wait_for_job`, for `/api/index-graph/status`."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    data: dict = {}
+    while time.monotonic() < deadline:
+        response = client.get("/api/index-graph/status", params={"job_id": job_id})
+        assert response.status_code == 200
+        data = response.json()
+        if data["done"]:
+            return data
+        time.sleep(0.02)
+    raise AssertionError(f"graph job {job_id} did not finish within {timeout}s: {data}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/index-graph -- "Build Knowledge Graph" (Phase 3/4 bugfix DEFECT 1)
+# ---------------------------------------------------------------------------
+
+
+def test_api_index_graph_status_with_no_job_ever_enqueued_returns_idle_state(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/index-graph/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] is None
+    assert data["done"] is True
+    assert data["status"] == "idle"
+
+
+def test_api_index_graph_missing_credential_reports_error_and_does_not_500(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/index-graph")
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    data = _wait_for_graph_job(client, job_id)
+    assert data["status"] == "done"
+    assert data["error"] is not None
+    assert "AUTHHUB_API_KEY" in data["error"]
+
+
+def test_api_index_graph_end_to_end_populates_entities(tmp_path: Path, monkeypatch) -> None:
+    """`/api/index-graph` reads real `raw/` ingested content (bugfix
+    DEFECT 2), via the same `build_extraction_client` the CLI uses (bugfix
+    DEFECT 1) -- proven end-to-end through the actual HTTP job/status API,
+    not by calling `reindex_graph` directly."""
+    from mythic_proportion import graph as graph_package  # noqa: F401
+    import mythic_proportion.graph.index as graph_index_module
+    from mythic_proportion.graph.tuples import COMPLETION_DELIM, TUPLE_DELIM
+
+    vault = _seed_vault(tmp_path)
+    drop_dir = vault / "drop"
+    drop_dir.mkdir(parents=True, exist_ok=True)
+    (drop_dir / "note.md").write_text(
+        "Grace Hopper worked on the COBOL programming language.", encoding="utf-8"
+    )
+    from mythic_proportion.ingest.pipeline import ingest_drop
+
+    ingest_report = ingest_drop(vault)
+    assert not ingest_report.errors
+
+    fixture_response = (
+        f'("entity"{TUPLE_DELIM}Grace Hopper{TUPLE_DELIM}PERSON{TUPLE_DELIM}a computer scientist)'
+        f"{COMPLETION_DELIM}"
+    )
+
+    def _fake_build_extraction_client(settings):  # noqa: ANN001
+        return FakeExtractionClient(lambda s, u, i: COMPLETION_DELIM if "MANY entities" in u else fixture_response)
+
+    monkeypatch.setattr(graph_index_module, "build_extraction_client", _fake_build_extraction_client)
+
+    client = _client(vault)
+    response = client.post("/api/index-graph")
+    assert response.status_code == 200
+    job_id = response.json()["job_id"]
+
+    data = _wait_for_graph_job(client, job_id)
+    assert data["status"] == "done"
+    assert data["error"] is None
+    assert data["entities_upserted"] == 1
+
+    graph_response = client.get("/api/graph", params={"mode": "entities"})
+    assert any(node["label"] == "GRACE HOPPER" for node in graph_response.json()["nodes"])
 
 
 def test_api_upload_with_no_provider_configured_reports_error_and_does_not_500(

@@ -26,6 +26,27 @@ authhub = ["httpx"]
 watch = ["watchdog"]
 web = ["fastapi", "uvicorn"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy", "httpx"]
+# 3D GraphRAG expansion extras (declared in Phase 0; wired up per-phase as
+# each sub-package below gains real logic — see specs/ROADMAP-BRIEF.md §3 and
+# specs/mythic-proportion-3d-graphrag.html). All heavy imports inside
+# `graph/`, `privacy/`, `agents/`, `mcp/` stay lazy so the base install
+# remains unaffected by these declarations.
+graphrag = ["graspologic", "leidenalg", "python-igraph"]
+# Base redaction extra: Presidio (framework) + our own dependency-free
+# SecretScanRecognizer (see mythic_proportion/privacy/redact.py) -- real,
+# always-shipped coverage with no torch/transformers weight. Pinned to a
+# tested minor-version range.
+privacy = ["presidio-analyzer>=2.2,<2.3", "presidio-anonymizer>=2.2,<2.3"]
+# Opt-in, additive on top of [privacy]: the OpenAI Privacy Filter
+# (openai/privacy-filter on Hugging Face) custom recognizer needs torch +
+# transformers, which are multi-GB/GPU-shaped -- deliberately kept out of
+# the default [privacy] extra so a base "I just want local redaction"
+# install stays lightweight. Pinned versions known to work with the pinned
+# presidio range above.
+privacy-full = ["torch>=2.2,<3", "transformers>=4.40,<5"]
+local = ["httpx"]
+mcp = ["fastmcp"]
+agents = ["pydantic-ai"]
 
 [project.scripts]
 mythic = "mythic_proportion.cli.app:app"
@@ -35,7 +56,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "mythic_proportion.index" = ["schema.sql"]
-"mythic_proportion.web" = ["static/*"]
+"mythic_proportion.web" = ["static/*", "static_next/**/*"]
 
 [tool.ruff]
 line-length = 100

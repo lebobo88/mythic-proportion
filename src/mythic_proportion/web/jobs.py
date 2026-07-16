@@ -39,6 +39,7 @@ from mythic_proportion.ingest.pipeline import ingest_drop
 
 JobStatus = Literal["queued", "running", "done"]
 FileStatus = Literal["queued", "compiling", "done", "error"]
+GraphJobStatus = Literal["queued", "running", "done"]
 
 
 @dataclass
@@ -103,6 +104,66 @@ _IDLE_STATE: dict[str, Any] = {
 }
 
 
+@dataclass
+class GraphJob:
+    """One enqueued GraphRAG ``index-graph`` (build/sync the entity/
+    relationship/claim knowledge graph) run, with a final report -- the
+    web UI's equivalent of ``mythic index-graph`` (bugfix DEFECT 1: that
+    command previously had no real entry point at all)."""
+
+    id: str
+    status: GraphJobStatus = "queued"
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    text_units_added: int = 0
+    text_units_updated: int = 0
+    text_units_deleted: int = 0
+    entities_upserted: int = 0
+    entities_deleted: int = 0
+    relationships_upserted: int = 0
+    claims_upserted: int = 0
+    llm_calls: int = 0
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "done": self.status == "done",
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "text_units_added": self.text_units_added,
+            "text_units_updated": self.text_units_updated,
+            "text_units_deleted": self.text_units_deleted,
+            "entities_upserted": self.entities_upserted,
+            "entities_deleted": self.entities_deleted,
+            "relationships_upserted": self.relationships_upserted,
+            "claims_upserted": self.claims_upserted,
+            "llm_calls": self.llm_calls,
+            "error": self.error,
+        }
+
+
+#: What ``GET /api/index-graph/status`` returns when no graph job has ever
+#: been enqueued -- shaped identically to ``GraphJob.to_dict()``.
+_GRAPH_IDLE_STATE: dict[str, Any] = {
+    "id": None,
+    "status": "idle",
+    "done": True,
+    "created_at": None,
+    "updated_at": None,
+    "text_units_added": 0,
+    "text_units_updated": 0,
+    "text_units_deleted": 0,
+    "entities_upserted": 0,
+    "entities_deleted": 0,
+    "relationships_upserted": 0,
+    "claims_upserted": 0,
+    "llm_calls": 0,
+    "error": None,
+}
+
+
 class IngestWorker:
     """Owns one FIFO queue of ingest jobs and the single daemon thread that
     drains it.
@@ -119,10 +180,18 @@ class IngestWorker:
     def __init__(self, vault_root: Path, *, get_settings: Any) -> None:
         self._vault_root = Path(vault_root)
         self._get_settings = get_settings
-        self._queue: queue.Queue[str | None] = queue.Queue()
+        # Queue items are `("ingest", job_id)` or `("graph", job_id)` --
+        # both kinds share this one FIFO queue and single worker thread, so
+        # a `POST /api/index-graph` job and a `POST /api/ingest` job (or two
+        # of either) can never run concurrently, same "no CPU stampede, no
+        # write race" guarantee this class already provided for ingest jobs
+        # alone.
+        self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
         self._lock = threading.Lock()
         self._jobs: dict[str, IngestJob] = {}
         self._job_order: list[str] = []
+        self._graph_jobs: dict[str, GraphJob] = {}
+        self._graph_job_order: list[str] = []
         self._id_counter = itertools.count(1)
         self._idle_event = threading.Event()
         self._idle_event.set()
@@ -160,7 +229,22 @@ class IngestWorker:
             self._jobs[job_id] = job
             self._job_order.append(job_id)
         self._idle_event.clear()
-        self._queue.put(job_id)
+        self._queue.put(("ingest", job_id))
+        return job_id
+
+    def enqueue_graph(self) -> str:
+        """Queue a new GraphRAG ``index-graph`` job (build/sync the entity/
+        relationship/claim knowledge graph over the vault's current `raw/`
+        ingested sources) and return its id immediately -- the web UI's
+        "Build Knowledge Graph" action, and the async-job/progress
+        counterpart to `mythic index-graph`."""
+        job_id = f"graph-job-{next(self._id_counter)}"
+        job = GraphJob(id=job_id)
+        with self._lock:
+            self._graph_jobs[job_id] = job
+            self._graph_job_order.append(job_id)
+        self._idle_event.clear()
+        self._queue.put(("graph", job_id))
         return job_id
 
     def get_job(self, job_id: str | None = None) -> dict[str, Any] | None:
@@ -172,6 +256,17 @@ class IngestWorker:
             if resolved_id is None:
                 return None
             job = self._jobs.get(resolved_id)
+            return job.to_dict() if job is not None else None
+
+    def get_graph_job(self, job_id: str | None = None) -> dict[str, Any] | None:
+        """Same contract as :meth:`get_job`, for graph jobs."""
+        with self._lock:
+            resolved_id = (
+                job_id if job_id is not None else (self._graph_job_order[-1] if self._graph_job_order else None)
+            )
+            if resolved_id is None:
+                return None
+            job = self._graph_jobs.get(resolved_id)
             return job.to_dict() if job is not None else None
 
     def wait_idle(self, timeout: float | None = 5.0) -> bool:
@@ -187,11 +282,15 @@ class IngestWorker:
 
     def _run(self) -> None:
         while True:
-            job_id = self._queue.get()
+            item = self._queue.get()
             try:
-                if job_id is None:
+                if item is None:
                     return
-                self._process_job(job_id)
+                kind, job_id = item
+                if kind == "graph":
+                    self._process_graph_job(job_id)
+                else:
+                    self._process_job(job_id)
             finally:
                 self._queue.task_done()
                 if self._queue.empty():
@@ -264,3 +363,65 @@ class IngestWorker:
         embedder = get_embedder(settings)
         with IndexStore(vault_root, embedder) as store:
             store.reindex(vault_root)
+
+        # Bugfix DEFECT 1 (wiring gap): the "auto-build knowledge graph
+        # after ingest" Settings toggle -- OFF by default (real LLM-cost
+        # concern, see `mythic index-graph`'s own docstring). A failure here
+        # is recorded as a job error, exactly like a per-source compile
+        # failure above, and never aborts/crashes the worker thread.
+        if settings.auto_build_graph:
+            try:
+                self._do_reindex_graph(settings)
+            except Exception as exc:  # noqa: BLE001 - never let auto-graph-build kill the worker thread
+                with self._lock:
+                    job.errors.append({"original_name": "<index-graph>", "message": str(exc)})
+                    job.updated_at = time.time()
+
+    def _process_graph_job(self, job_id: str) -> None:
+        with self._lock:
+            job = self._graph_jobs[job_id]
+            job.status = "running"
+            job.updated_at = time.time()
+
+        try:
+            report = self._do_reindex_graph(self._get_settings())
+            with self._lock:
+                job.text_units_added = report.text_units_added
+                job.text_units_updated = report.text_units_updated
+                job.text_units_deleted = report.text_units_deleted
+                job.entities_upserted = report.entities_upserted
+                job.entities_deleted = report.entities_deleted
+                job.relationships_upserted = report.relationships_upserted
+                job.claims_upserted = report.claims_upserted
+                job.llm_calls = report.llm_calls
+        except Exception as exc:  # noqa: BLE001 - a job failure must never kill the worker thread
+            with self._lock:
+                job.error = str(exc)
+        finally:
+            with self._lock:
+                job.status = "done"
+                job.updated_at = time.time()
+
+    def _do_reindex_graph(self, settings: Settings) -> Any:
+        """Build the extraction client and run one `reindex_graph` pass --
+        shared by the explicit "Build Knowledge Graph" job
+        (:meth:`_process_graph_job`) and the auto-build-after-ingest path
+        (:meth:`_run_job`). Raises on a setup failure (missing credential,
+        redaction unavailable) or an extraction failure -- callers decide
+        how to record that (a dedicated `GraphJob.error`, or an ingest
+        job's `errors` list)."""
+        from mythic_proportion.graph.index import build_extraction_client, reindex_graph
+
+        vault_root = self._vault_root
+        embedder = get_embedder(settings)
+        client = build_extraction_client(settings)
+        with IndexStore(vault_root, embedder) as store:
+            store.reindex(vault_root)
+            return reindex_graph(
+                vault_root,
+                store.conn,
+                extraction_client=client,
+                embedder=embedder,
+                vec_active=store.vec_active,
+                model=settings.llm_model,
+            )
