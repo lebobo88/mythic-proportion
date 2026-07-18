@@ -424,9 +424,17 @@ class SecretScanRecognizer:
 @runtime_checkable
 class Analyzer(Protocol):
     """Anything that can find PII spans in text -- satisfied by Presidio's
-    real ``AnalyzerEngine`` and by any test double."""
+    real ``AnalyzerEngine`` and by any test double.
 
-    def analyze(self, text: str, language: str = "en") -> list[Any]: ...
+    ``language`` intentionally has no default here (pre-existing mypy
+    finding, fixed as part of Section 6.2(d)'s cheap-fix cleanup):
+    Presidio's real ``AnalyzerEngine.analyze`` declares ``language`` as a
+    required parameter in its own type stub, so a Protocol default would
+    structurally overpromise what the real engine actually accepts -- every
+    real call site in this module already passes ``language`` explicitly
+    (see :meth:`Redactor.redact`), so this changes no runtime behavior."""
+
+    def analyze(self, text: str, language: str) -> list[Any]: ...
 
 
 class Redactor:
@@ -571,7 +579,18 @@ class Redactor:
             pattern = re.compile(
                 r"\[?REDACTED[ _]+" + type_pattern + r"[ _]+" + re.escape(index) + r"\]?"
             )
-            result = pattern.sub(lambda _m, _original=original: _original, result, count=1)
+
+            # A small named function, not a lambda with a default-argument
+            # loop-variable-capture trick (pre-existing mypy finding, fixed
+            # as part of Section 6.2(d)'s cheap-fix cleanup: mypy couldn't
+            # infer the lambda's parameter/return types). Explicit
+            # annotations here are unambiguous, and the closure still
+            # captures the correct per-iteration `original` via the default
+            # argument, exactly as the lambda did.
+            def _replace_match(_match: re.Match[str], _original: str = original) -> str:
+                return _original
+
+            result = pattern.sub(_replace_match, result, count=1)
         return result
 
 

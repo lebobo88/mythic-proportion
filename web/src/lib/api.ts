@@ -64,20 +64,106 @@ export interface QueryResponse {
 // src/mythic_proportion/query/engine.py `_resolve_mode`).
 export type QueryMode = "auto" | "legacy" | "global" | "local" | "drift" | "activation";
 
+// Phase 4b (plan Section 6.4/7): the enriched `/api/graph` per-node
+// centrality projection, exactly as the SERVER sends it over the wire --
+// `degree` is always present (normalized 0..1), plus at least one of
+// `betweenness`/`eigenvector` (this project currently computes `eigenvector`
+// only -- see the Phase 4b engineering report for the "which measure"
+// rationale). This is a WIRE-only shape: `fetchGraph` collapses it down to
+// the single scalar `GraphNode.centrality` below before any client code
+// (including `deriveVizGraph`) ever sees a node -- see
+// `collapseCentralityScore`.
+export interface CentralityScores {
+  degree: number;
+  betweenness?: number;
+  eigenvector?: number;
+}
+
 export interface GraphNode {
   id: string;
   label: string;
   type: string;
+  // Phase 4b enriched `/api/graph` projection (mode=entities|both only) --
+  // additive/optional; absent on a wikilinks-mode node, or on any node from
+  // a pre-Phase-4b fixture/cached response. Real Leiden community id /
+  // hierarchy depth (0 = coarsest); see plan Section 6.4/7.
+  community?: number;
+  level?: number;
+  /**
+   * Already the collapsed CLIENT scalar (0..1), not the server's richer
+   * `CentralityScores` wire object -- `fetchGraph` does that collapse once,
+   * at the network boundary (see `collapseCentralityScore`), so this field
+   * matches Phase 4a's synthetic-fixture shape (`synthetic.ts`) exactly:
+   * every existing renderer (`ForceLayoutClient`/`forceLayout.worker.ts`/
+   * `modeForces.ts`/`terrainElevation.ts`) already reads `node.centrality`
+   * as a plain number via `node.centrality ?? 0.1`. This is the plan
+   * Section 5.3 "match the shape client-side code already expects" call --
+   * see the Phase 4b engineering report -- so Phase 4c's real-data wiring
+   * needs no second contract negotiation.
+   */
+  centrality?: number;
+  /**
+   * This node's ancestor community id at every level COARSER than its own
+   * `level`/`community` -- e.g. `{0: 3}` means "this node's level-0
+   * ancestor cluster is 3". Keyed by level (Phase 4b, plan Section 7).
+   * Absent when the node has only one stored level (nothing to chain).
+   */
+  parentCommunity?: Record<number, number>;
 }
 
 export interface GraphEdge {
   source: string;
   target: string;
+  // Already returned by the server for entities/both-mode edges (see
+  // store.py's `read_entity_graph`) -- this was previously only declared on
+  // `VizEdge` (types.ts), not here, so nothing could read it with a typed
+  // `GraphEdge`/`GraphData` value. Phase 4b client-wiring-only fix (plan
+  // Section 6.4): no server change, just making the existing wire field
+  // visible at this type.
+  weight?: number;
+  type?: string;
 }
 
 export interface GraphData {
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+/**
+ * Collapse the server's richer per-node `CentralityScores` wire object down
+ * to the single scalar every existing graph renderer expects (see
+ * `GraphNode.centrality`'s doc comment above). Preference order:
+ * `eigenvector` (this project's chosen primary measure -- see the Phase 4b
+ * engineering report) > `betweenness` (if eigenvector wasn't computed) >
+ * `degree` (always present, guaranteed fallback). Already-scalar input
+ * (a plain number, e.g. from a hand-written test fixture or a future
+ * fixture that already matches the client shape) passes straight through
+ * unchanged -- this function is idempotent.
+ */
+export function collapseCentralityScore(raw: unknown): number | undefined {
+  if (typeof raw === "number") return raw;
+  if (raw == null || typeof raw !== "object") return undefined;
+  const scores = raw as CentralityScores;
+  if (typeof scores.eigenvector === "number") return scores.eigenvector;
+  if (typeof scores.betweenness === "number") return scores.betweenness;
+  if (typeof scores.degree === "number") return scores.degree;
+  return undefined;
+}
+
+/**
+ * Normalizes a raw `/api/graph` JSON payload into this module's `GraphData`
+ * shape. Currently only collapses the Phase 4b enriched `centrality` wire
+ * object (see `collapseCentralityScore`) -- every other field passes
+ * through completely unchanged. Exported so it's directly testable without
+ * a network mock.
+ */
+export function normalizeGraphResponse(data: { nodes?: unknown[]; edges?: unknown[] }): GraphData {
+  const nodes = (data.nodes ?? []).map((raw) => {
+    const node = raw as GraphNode;
+    const centrality = collapseCentralityScore(node.centrality);
+    return centrality === undefined ? node : ({ ...node, centrality } as GraphNode);
+  });
+  return { nodes, edges: (data.edges ?? []) as GraphEdge[] };
 }
 
 export interface JobFileStatus {
@@ -157,6 +243,14 @@ export interface ConfigResponse {
   // GraphRAG extraction pipeline bugfix (DEFECT 1) addition -- strictly
   // additive/optional, same shape as the Phase 6 fields above.
   auto_build_graph?: boolean;
+  // Browser-audit item 4 additions -- strictly additive/optional: the
+  // ACTUALLY-active provider/model, accounting for `local: true`'s
+  // unconditional override of `provider`/`model` above (which stay
+  // untouched by that override). Callers displaying "what model will this
+  // call actually use" (e.g. AskView's model hint) should prefer these over
+  // the raw `provider`/`model` fields when present.
+  effective_provider?: string;
+  effective_model?: string;
 }
 
 export interface ConfigUpdateRequest {
@@ -263,7 +357,8 @@ export async function fetchGraph(mode?: GraphMode): Promise<GraphData> {
   const url = mode ? `/api/graph?mode=${encodeURIComponent(mode)}` : "/api/graph";
   const res = await fetchJsonWithTimeout(url);
   if (!res.ok) throw new Error(`unexpected status ${res.status}`);
-  return res.json();
+  const data = await res.json();
+  return normalizeGraphResponse(data);
 }
 
 export async function uploadFiles(files: FileList | File[]): Promise<{ job_id: string; saved: string[] }> {

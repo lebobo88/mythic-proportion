@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Input } from "../../components/ui";
+import { PageDetailPane } from "../../components/detail-pane/PageDetailPane";
 import { fetchConfig, runQuery, type QueryMode, type QueryResponse } from "../../lib/api";
 import "./ask.css";
 
@@ -23,7 +24,13 @@ const QUERY_MODES: { value: QueryMode | ""; label: string }[] = [
 // Ask view: POST /api/query with citations + hits + an LLM-synthesis
 // toggle + a model hint -- parity target for the legacy #view-ask markup
 // (see src/mythic_proportion/web/static/app.js `runAsk`/`refreshAskModelHint`).
-export function AskView() {
+//
+// Phase 4d (plan Section 6.6 item 1; Section 9.3 journey 7): the answer's
+// `hits` (source pages) are now rendered as selectable cards -- previously
+// nowhere in the UI besides a bare count -- wired to a first-class
+// reading/detail pane (the shared `PageDetailPane`, same loading/empty/
+// error/populated contract as Wiki/Graph/Search's own panes).
+export function AskView({ onOpenPage }: { onOpenPage: (path: string) => void }) {
   const [question, setQuestion] = useState("");
   const [useLlm, setUseLlm] = useState(true);
   const [mode, setMode] = useState<QueryMode | "">("");
@@ -31,10 +38,23 @@ export function AskView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelHint, setModelHint] = useState("Model: loading...");
+  const [selectedHitPath, setSelectedHitPath] = useState<string | null>(null);
 
   useEffect(() => {
     fetchConfig()
-      .then((config) => setModelHint(`Model: ${config.model} (${config.provider})`))
+      .then((config) => {
+        // Browser-audit item 4 (trust finding): prefer the ACTUALLY-active
+        // provider/model (`effective_provider`/`effective_model`) over the
+        // raw stored `provider`/`model` fields -- `local: true` overrides
+        // routing to Ollama unconditionally without rewriting those raw
+        // fields underneath it, so showing them unconditionally could read
+        // as "deepseek-chat (authhub)" even while every real call actually
+        // went to Ollama. Falls back to the raw fields for an older server
+        // build that hasn't sent the new (optional, additive) keys yet.
+        const model = config.effective_model ?? config.model;
+        const provider = config.effective_provider ?? config.provider;
+        setModelHint(`Model: ${model} (${provider})`);
+      })
       .catch(() => setModelHint("Model: unavailable"));
   }, []);
 
@@ -43,6 +63,7 @@ export function AskView() {
     if (!q) return;
     setLoading(true);
     setError(null);
+    setSelectedHitPath(null);
     try {
       const result = await runQuery(q, useLlm, 8, mode === "" ? undefined : mode);
       setAnswer(result);
@@ -102,7 +123,7 @@ export function AskView() {
               {answer.text}
             </div>
             {answer.citations.length > 0 ? (
-              <div className="mp-ask-tag-list">
+              <div className="mp-ask-tag-list" aria-label="Citations">
                 {answer.citations.map((citation) => (
                   <span className="mp-ask-tag" key={citation}>
                     {citation}
@@ -113,6 +134,43 @@ export function AskView() {
             <div className="mp-ask-meta">
               used_llm={String(answer.used_llm)} &middot; {answer.hits.length} source page(s)
             </div>
+            {/* Phase 4d (plan Section 6.6 item 1): the first-class
+                reading/detail pane -- source hits were previously not
+                rendered at all besides the bare count above. */}
+            {answer.hits.length > 0 ? (
+              <div className="mp-ask-body">
+                <div className="mp-ask-hits">
+                  {answer.hits.map((hit) => (
+                    <button
+                      type="button"
+                      key={hit.page_path}
+                      className={
+                        hit.page_path === selectedHitPath
+                          ? "mp-ask-hit-card mp-ask-hit-card--selected"
+                          : selectedHitPath
+                            ? "mp-ask-hit-card mp-context-dimmed"
+                            : "mp-ask-hit-card"
+                      }
+                      aria-current={hit.page_path === selectedHitPath ? "true" : undefined}
+                      onClick={() => setSelectedHitPath(hit.page_path)}
+                    >
+                      <div className="mp-ask-hit-title">{hit.title ?? hit.page_path}</div>
+                      {hit.tier ? (
+                        <div className="mp-ask-hit-meta">
+                          {hit.tier}
+                          {typeof hit.score === "number" ? ` · score ${hit.score.toFixed(3)}` : ""}
+                        </div>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+                <PageDetailPane
+                  path={selectedHitPath}
+                  onOpenInWiki={onOpenPage}
+                  emptyHint="Select a source to see details."
+                />
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>

@@ -109,6 +109,69 @@ def test_communities_and_community_reports_tables_start_empty() -> None:
 
 
 # ---------------------------------------------------------------------------
+# GraphStore.read_entity_graph ordering (T2 remediation, round 3 -- 3D graph
+# intermittent-collapse investigation)
+# ---------------------------------------------------------------------------
+
+
+def test_read_entity_graph_returns_nodes_and_edges_in_stable_ascending_id_order() -> None:
+    """`read_entity_graph()`'s two queries had no `ORDER BY`, so SQLite's row
+    order was formally undefined (per SQLite's own docs: "If there is no
+    ORDER BY... the order... is undefined"), even though it happens to look
+    stable for a fresh, never-mutated table in most environments -- SQLite's
+    actual default table-scan implementation walks the rowid B-tree in
+    ascending key order for a plain, unfiltered `SELECT`, and ordinary
+    insert/delete churn (verified: even a delete-then-reinsert of a middle
+    row) doesn't perturb that scan order in practice, so a test that relies
+    on incidental physical row layout can't reliably prove the guarantee.
+    This matters because the *only* consumer of this order is the 3D graph's
+    `d3-force-3d` worker, which assigns each node's INITIAL position purely
+    by its ARRAY INDEX (a deterministic golden-angle spiral, in
+    `initializeNodes()`) -- so two logically-identical graphs returned in a
+    different row order start their physics simulation from a genuinely
+    different configuration, which for a mostly-disconnected, weakly-
+    contained graph can converge to a different (including visually
+    collapsed) equilibrium.
+
+    To prove the `ORDER BY` clauses are actually load-bearing (not simply
+    matching SQLite's usual, coincidental default), this test flips
+    `PRAGMA reverse_unordered_selects = ON` on its own connection --
+    SQLite's own documented, purpose-built testing pragma that forces the
+    query planner to scan tables in the REVERSE of their natural order for
+    any statement lacking an explicit `ORDER BY`, specifically so tests can
+    catch code that wrongly relies on implicit order (verified locally: a
+    bare `SELECT id FROM t` against `(1,2,3)` returns `[3,2,1]` under this
+    pragma, while `SELECT id FROM t ORDER BY id` still returns `[1,2,3]`,
+    unaffected -- an explicit `ORDER BY` always wins). Confirmed genuinely
+    RED against the pre-fix (no-`ORDER BY`) query under this pragma before
+    the fix landed; the assertions below are GREEN only because
+    `read_entity_graph()`'s explicit `ORDER BY id` / `ORDER BY source_id,
+    target_id, type` clauses force ascending order regardless of the
+    connection's default scan direction.
+    """
+    conn = _memory_conn()
+    conn.execute("PRAGMA reverse_unordered_selects = ON")
+    store = GraphStore(conn)
+
+    id_a = store.upsert_entity("Alpha", "CONCEPT", "first")
+    id_b = store.upsert_entity("Bravo", "CONCEPT", "second")
+    id_c = store.upsert_entity("Charlie", "CONCEPT", "third")
+    id_d = store.upsert_entity("Delta", "CONCEPT", "fourth")
+
+    store.upsert_relationship(id_d, id_a, "RELATED", "d->a", 1.0)
+    store.upsert_relationship(id_a, id_c, "RELATED", "a->c", 1.0)
+    store.upsert_relationship(id_b, id_d, "RELATED", "b->d", 1.0)
+
+    nodes, edges = store.read_entity_graph()
+
+    node_ids = [int(n["id"].removeprefix("entity:")) for n in nodes]
+    assert node_ids == [id_a, id_b, id_c, id_d]
+
+    edge_pairs = [(int(e["source"].removeprefix("entity:")), int(e["target"].removeprefix("entity:"))) for e in edges]
+    assert edge_pairs == sorted(edge_pairs)
+
+
+# ---------------------------------------------------------------------------
 # Delimited-tuple parser
 # ---------------------------------------------------------------------------
 
@@ -225,6 +288,32 @@ def test_parse_tuple_records_single_record_unaffected_by_fallback() -> None:
 
 def test_normalize_title_dedups_case_and_whitespace_variants() -> None:
     assert normalize_title("  Apple Inc ") == normalize_title("APPLE INC") == "APPLE INC"
+
+
+# Browser-audit item 7 (cosmetic/data-quality, live-Chrome finding):
+# duplicate/malformed extracted entities -- "PRIYA ANAND" appeared as two
+# separate PERSON nodes because the source text itself line-wraps mid-name
+# ("...CEO Priya\nAnand.") and the extraction path preserves that embedded
+# newline verbatim; `normalize_title`'s old `strip().upper()` only trims
+# leading/trailing whitespace, so "PRIYA\nANAND" and "PRIYA ANAND" hashed to
+# two different dedup keys. Separately, a LOCATION node carried a raw
+# LLM delimiter artifact (`<|>7`, a leaked TUPLE_DELIM + relationship-
+# strength digit) as an unsanitized suffix.
+def test_normalize_title_collapses_embedded_newlines_and_whitespace_runs() -> None:
+    """A source-text mid-name line wrap must dedup to the same key as the
+    clean, single-spaced form -- this is what fixes the duplicate "PRIYA
+    ANAND" PERSON-node bug."""
+    assert normalize_title("Priya\nAnand") == normalize_title("Priya Anand") == "PRIYA ANAND"
+    assert normalize_title("Priya\n  Anand") == "PRIYA ANAND"
+    assert normalize_title("Meridian\tLogistics") == "MERIDIAN LOGISTICS"
+
+
+def test_normalize_title_strips_leaked_delimiter_control_tokens() -> None:
+    """A truncated/malformed tuple record can leak a raw delimiter artifact
+    (e.g. `<|>7`, TUPLE_DELIM + a stray relationship-strength digit) into a
+    neighboring field; this must never survive into a stored entity title."""
+    assert normalize_title("Austin, Texas<|>7") == "AUSTIN, TEXAS"
+    assert normalize_title("<|COMPLETE|>Denver") == "DENVER"
 
 
 def test_normalize_entity_type_falls_back_to_other_for_unknown_type() -> None:

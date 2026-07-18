@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 import mythic_proportion.graph.index as graph_index_module

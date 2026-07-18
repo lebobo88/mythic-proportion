@@ -397,6 +397,93 @@ describe("SettingsView", () => {
     expect(await screen.findByText(/Auto-build knowledge graph ON/)).toBeInTheDocument();
   });
 
+  // ------------------------------------------------------------------
+  // Browser-audit item 4 residual: local-mode/provider-dropdown copy
+  // contradiction (dropdown shows the raw stored provider while the
+  // description text below it names a different, actually-active
+  // provider at the same time).
+  // ------------------------------------------------------------------
+
+  it("shows a local-mode override note and rephrases the API-key sentence around the effective provider when local mode diverges from the raw stored provider", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        provider: "authhub",
+        model: "gpt-5",
+        authhub_base_url: "",
+        route_alias: null,
+        has_api_key: true,
+        local: true,
+        redaction_enabled: true,
+        effective_provider: "ollama",
+        effective_model: "qwen2.5:7b-instruct",
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        models: [],
+        current: "gpt-5",
+        provider: "authhub",
+        error: "Provider is Ollama (local mode) -- enter a model slug manually.",
+      }),
+    });
+
+    render(<SettingsView />);
+    await screen.findByLabelText("Model");
+
+    // The dropdown keeps showing the raw stored provider (not silently
+    // swapped, and not disabled -- turning local mode off must restore it).
+    expect(screen.getByLabelText("Provider")).toHaveValue("authhub");
+
+    // A clear, explicit override note names the actually-active provider.
+    const note = screen.getByText(/Local mode is ON/i);
+    expect(note).toHaveTextContent("ollama");
+    expect(note).toHaveTextContent("qwen2.5:7b-instruct");
+
+    // The API-key sentence no longer claims "this provider" (authhub) while
+    // the hint below simultaneously talks about Ollama -- it now names the
+    // same effective provider the override note and the model hint do.
+    expect(
+      screen.getByText("An API key is configured for the effective provider (ollama)."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("An API key is configured for this provider.")).not.toBeInTheDocument();
+  });
+
+  it("does not show the local-mode override note when the raw and effective providers already match", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        provider: "ollama",
+        model: "qwen2.5:7b-instruct",
+        authhub_base_url: "",
+        route_alias: null,
+        has_api_key: true,
+        local: true,
+        redaction_enabled: true,
+        effective_provider: "ollama",
+        effective_model: "qwen2.5:7b-instruct",
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        models: [],
+        current: "qwen2.5:7b-instruct",
+        provider: "ollama",
+        error: "Provider is Ollama (local mode) -- enter a model slug manually.",
+      }),
+    });
+
+    render(<SettingsView />);
+    await screen.findByLabelText("Ollama model");
+
+    expect(screen.queryByText(/Local mode is ON/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("An API key is configured for this provider."),
+    ).toBeInTheDocument();
+  });
+
   it("security invariant: never renders an API-key input field", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,

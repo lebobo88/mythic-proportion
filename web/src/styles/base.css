@@ -41,3 +41,20 @@ input {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/*
+ * Generalized focus-plus-context-dim treatment, app-wide (plan Section
+ * 5.1/6.6 item 4; `--focus-context-dim` token, tokens/semantic.css). The
+ * 2D-chrome generalization of Phase 4c's per-mode graph focus/dim motif
+ * (InstancedNodes.tsx's non-neighbor node opacity) -- applied by a caller to
+ * a non-selected sibling once something IS selected (WikiView's page list,
+ * SearchView's result cards, AskView's source-hit cards). Lives here, in the
+ * always-loaded base stylesheet, rather than in any one view's own CSS
+ * module, so it stays available regardless of which view mounted first.
+ * Never the only cue: every caller pairs this with its own existing
+ * non-color selected-state border/background treatment.
+ */
+.mp-context-dimmed {
+  opacity: var(--focus-context-dim);
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}

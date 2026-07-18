@@ -1,20 +1,21 @@
 // Client-side graph-derivation utilities: degree/centrality sizing and a
 // deterministic "community" bucketing.
 //
-// NOTE on communities: real Leiden communities are a *server-side* Phase 4
-// concept (see src/mythic_proportion/graph/ -- graspologic hierarchical
-// Leiden) but `GET /api/graph` (mode=entities|both) does not currently
-// project a community id onto each node (see
-// GraphStore.read_entity_graph -- id/label/type/kind/degree only, no
-// community). Rather than block Phase 5's rendering deliverables on a new
-// backend field, we derive a *visual* community bucket client-side via
-// connected-component grouping + a stable hash into the 8-slot
-// `--graph-community-*` ramp. This is intentionally NOT a Leiden
-// implementation -- it exists purely so the hull/color-by-community
-// deliverable has *some* grouping to render, is fully deterministic (same
-// input graph -> same buckets every time), and is trivially replaced by a
-// real `community` field from the server without touching any renderer
-// code (see VizNode.community's single call site: `deriveVizGraph`).
+// NOTE on communities: real Leiden communities are a *server-side* concept
+// (see src/mythic_proportion/graph/ -- graspologic hierarchical Leiden).
+// Phase 4b (plan Section 6.4/7) taught `GET /api/graph` (mode=entities|both)
+// to project a real `community`/`level`/`centrality` onto each node once
+// `mythic index-graph` has run -- `deriveVizGraph` below prefers that real
+// projection whenever the WHOLE response carries it. `computeCommunities`
+// here remains the FALLBACK path only: a *visual* community bucket derived
+// client-side via connected-component grouping + a stable hash into the
+// 8-slot `--graph-community-*` ramp, used only when the server hasn't
+// projected real community ids yet (a pre-Phase-4b fixture, a
+// wikilinks-mode graph, or a vault that has never run `mythic index-graph`).
+// This is intentionally NOT a Leiden implementation -- it exists purely so
+// the hull/color-by-community deliverable always has *some* grouping to
+// render, and is fully deterministic (same input graph -> same buckets
+// every time).
 import type { GraphData, VizGraphData, VizNode } from "./types";
 
 export const COMMUNITY_COUNT = 8;
@@ -92,23 +93,81 @@ export function sizeForDegree(degree: number, maxDegree: number): number {
   return MIN_SIZE + t * (MAX_SIZE - MIN_SIZE);
 }
 
-/** Adds degree/community/size to every node -- the one place VizNode gets built. */
+function hasRealCommunity(node: { community?: number }): boolean {
+  return typeof node.community === "number";
+}
+
+/** Adds degree/community/size to every node -- the one place VizNode gets built.
+ *
+ * Phase 4b (plan Section 6.4), J-002 remediation (Codex `CODE_REVIEW`
+ * checkpoint, plan Section 12): the real/fallback boundary is PER-NODE, not
+ * whole-response. The production Graph view always fetches `mode=both`
+ * (page nodes + entity nodes unioned) -- the server only ever projects
+ * Leiden data onto ENTITY nodes (see `project_node_enrichment` in
+ * communities.py), so page nodes never carry a `community` field, no matter
+ * how current the index is. A whole-response "every node must have one"
+ * check therefore discarded EVERY entity node's real community too, purely
+ * because unrelated page nodes never carry one -- making the real
+ * projection permanently unreachable in production, not merely "sometimes
+ * approximate". Each node now independently uses its own real `community`
+ * when present; only the nodes that actually lack one (page nodes, or every
+ * node before `mythic index-graph` has ever run) fall back to the client
+ * union-find grouping (still explicitly labeled "approximate" -- see
+ * `computeCommunities`'s own module doc above).
+ *
+ * Fallback ids are offset past every real Leiden id actually present in
+ * THIS response (see `fallbackCommunityOffset` below) so the two id spaces
+ * can never numerically collide when they coexist in one view -- a
+ * fallback-bucketed page node is never mistakable for a real Leiden
+ * community by number alone. `communityApproximate` additionally marks
+ * exactly which nodes got the fallback treatment, so a future renderer
+ * (Phase 4c) can visually distinguish them (e.g. a muted/dashed hull)
+ * without re-deriving anything.
+ *
+ * `level`/`centrality`/`parentCommunity` need no equivalent per-node
+ * handling -- they simply ride through unchanged via the `...node` spread
+ * below, exactly like every pre-existing additive field this function
+ * already passed through untouched. */
 export function deriveVizGraph(data: GraphData): VizGraphData {
   const degrees = computeDegrees(data);
-  const communities = computeCommunities(data);
+  const needsFallback = data.nodes.some((node) => !hasRealCommunity(node));
+  const fallbackCommunities = needsFallback ? computeCommunities(data) : null;
+  const fallbackOffset = fallbackCommunityOffset(data);
   const maxDegree = Math.max(1, ...Array.from(degrees.values()));
 
   const nodes: VizNode[] = data.nodes.map((node) => {
     const degree = (node as { degree?: number }).degree ?? degrees.get(node.id) ?? 0;
+    const isReal = hasRealCommunity(node);
+    const community = isReal
+      ? (node.community as number)
+      : fallbackOffset + (fallbackCommunities!.get(node.id) ?? 0);
     return {
       ...node,
       degree,
-      community: communities.get(node.id) ?? 0,
+      community,
+      communityApproximate: !isReal,
       size: sizeForDegree(degree, maxDegree),
     };
   });
 
   return { nodes, edges: data.edges };
+}
+
+/**
+ * The smallest fallback-bucket offset guaranteed to sit strictly past every
+ * REAL Leiden `community` id already present in `data` -- 0 when no node
+ * carries a real id at all (the common today's-default/pre-index-graph
+ * case, where fallback ids stay exactly `0..COMMUNITY_COUNT-1`, unchanged
+ * from this function's pre-J-002 numbering). See `deriveVizGraph`'s doc
+ * comment for why this matters once real and fallback ids can coexist in
+ * one response.
+ */
+function fallbackCommunityOffset(data: GraphData): number {
+  let maxReal = -1;
+  for (const node of data.nodes) {
+    if (typeof node.community === "number" && node.community > maxReal) maxReal = node.community;
+  }
+  return maxReal + 1;
 }
 
 /** 1-hop neighbor id set for a given node id, from the raw edge list. */

@@ -3,6 +3,7 @@
 // (positions flow into refs, per the "never setState in useFrame" perf
 // requirement -- see Graph3DScene.tsx).
 import type { ForceLayoutInMessage, ForceLayoutOutMessage, WorkerLink, WorkerNode } from "./forceLayout.worker";
+import type { GraphMode } from "../types";
 
 /** Minimal surface this client needs from a Worker -- real `Worker` satisfies it,
  *  and tests can supply a fake to assert worker-based layout structurally
@@ -42,12 +43,14 @@ export class ForceLayoutClient {
     return () => this.endListeners.delete(cb);
   }
 
-  init(nodes: WorkerNode[], links: WorkerLink[], warmupTicks = 60): void {
-    this.worker.postMessage({ type: "init", nodes, links, warmupTicks });
+  // `mode` is optional and additive (Phase 4a spike, plan Section 6.3):
+  // omitted, the worker behaves exactly as it did before the spike ("cloud").
+  init(nodes: WorkerNode[], links: WorkerLink[], warmupTicks = 60, mode?: GraphMode): void {
+    this.worker.postMessage({ type: "init", nodes, links, warmupTicks, mode });
   }
 
-  update(nodes: WorkerNode[], links: WorkerLink[], warmupTicks = 30): void {
-    this.worker.postMessage({ type: "update", nodes, links, warmupTicks });
+  update(nodes: WorkerNode[], links: WorkerLink[], warmupTicks = 30, mode?: GraphMode): void {
+    this.worker.postMessage({ type: "update", nodes, links, warmupTicks, mode });
   }
 
   reheat(): void {

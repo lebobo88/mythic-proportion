@@ -131,8 +131,25 @@ def ingest_drop(
       logging the skip (the content is already preserved in ``raw/``).
     * ``"keep"`` — leave the duplicate file in ``drop/`` untouched for manual
       resolution; only the skip is logged.
+
+    ``vault_root`` is resolved to an absolute path up front (T2 job finding,
+    Phase 3 remediation): every ``raw_path`` this function ever records into
+    the dedup ledger is built from it (``raw_dir = vault_root / "raw"``), and
+    a *relative* ``vault_root`` -- e.g. ``mythic serve --vault demo-vault``
+    run from the parent of the vault directory, rather than ``--vault .``
+    from inside it -- previously produced a CWD-relative ledger entry like
+    ``"demo-vault/raw/<hash>.md"``. That string happens to be prefixed with
+    the vault's own directory name, which is NOT the same thing as being
+    vault-relative: a later :func:`~mythic_proportion.web.pages.collect_raw_sources`
+    call resolves its own ``vault_root`` argument to absolute and, seeing a
+    non-absolute stored ``raw_path``, reconstructs it as
+    ``vault_root / raw_path`` -- silently double-prepending the vault
+    directory name and finding nothing, with no error surfaced (zero text
+    units reach GraphRAG extraction). Resolving here instead means every
+    ``raw_path`` this function ever writes is unambiguous and absolute,
+    regardless of how the caller's own ``vault_root`` argument was spelled.
     """
-    vault_root = Path(vault_root)
+    vault_root = Path(vault_root).resolve()
     drop_dir = vault_root / "drop"
     raw_dir = vault_root / "raw"
     staging_dir = vault_root / STAGING_RELATIVE_DIR

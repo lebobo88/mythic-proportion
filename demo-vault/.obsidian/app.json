@@ -1,0 +1,41 @@
+{
+  "graph": {
+    "colorGroups": [
+      {
+        "query": "path:wiki/sources",
+        "color": {
+          "a": 1,
+          "rgb": 3120731
+        }
+      },
+      {
+        "query": "path:wiki/entities",
+        "color": {
+          "a": 1,
+          "rgb": 10182117
+        }
+      },
+      {
+        "query": "path:wiki/concepts",
+        "color": {
+          "a": 1,
+          "rgb": 3108845
+        }
+      },
+      {
+        "query": "path:wiki/sessions",
+        "color": {
+          "a": 1,
+          "rgb": 14263302
+        }
+      }
+    ]
+  },
+  "attachmentFolderPath": "raw",
+  "newFileLocation": "folder",
+  "newFileFolderPath": "wiki",
+  "useMarkdownLinks": false,
+  "alwaysUpdateLinks": true,
+  "showUnsupportedFiles": true,
+  "livePreview": true
+}

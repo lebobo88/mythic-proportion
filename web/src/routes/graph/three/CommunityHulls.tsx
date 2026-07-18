@@ -9,7 +9,6 @@ import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js"
 import { Vector3 } from "three";
 import type { GraphColors } from "../../../lib/graph-colors";
 import type { VizNode } from "../types";
-import { COMMUNITY_COUNT } from "../graphMath";
 
 export function CommunityHulls({
   nodes,
@@ -72,7 +71,10 @@ export function CommunityHulls({
       {hulls.map(({ community, geometry }) => (
         <mesh key={community} geometry={geometry}>
           <meshBasicMaterial
-            color={colors.community[community % COMMUNITY_COUNT]?.color ?? colors.hullFill.color}
+            // Phase 4c (plan Section 6.5 item 5): modulo the GENERATED
+            // array's own length -- see the identical fix/comment in
+            // Graph2DFallback.tsx's `nodeColor`.
+            color={colors.community[community % colors.community.length]?.color ?? colors.hullFill.color}
             transparent
             opacity={colors.hullFill.alpha}
             depthWrite={false}

@@ -29,8 +29,160 @@
   --graph-community-7: var(--ramp-community-7);
   --graph-community-8: var(--ramp-community-8);
 
+  /*
+   * Generative OKLCH community ramp (plan Section 6.5 item 5; visual-system
+   * spec Section 5.1): `communityColor(index, count, level)` composes these
+   * plain-number parameters (read via `readCommunityGeneratorParams` in
+   * lib/graph-colors.ts, then run through culori -- the single color
+   * source) into `hue = hueBase + index * (360 / count)`, with `level`
+   * bounded into `[chroma-min, chroma-max]` chroma only, NEVER lightness.
+   * Replaces/extends the old fixed 8-slot `--graph-community-*` ramp above
+   * (kept, unused by JS now, still consumed by DesignPreview.tsx's token
+   * gallery -- tokens extend, never replace) so community coloring stays
+   * correct at real Leiden counts of 8, 16, 32+, not just a hardcoded 8.
+   * Dark-theme `lightness` is numerically identical to the fixed ramp's old
+   * L=0.72 (unchanged, per Section 5.1's "dark-theme values unchanged").
+   */
+  --graph-community-generator-hue-base: 20;
+  --graph-community-generator-chroma-min: 0.12;
+  --graph-community-generator-chroma-max: 0.2;
+  --graph-community-generator-chroma-level-step: 0.015;
+  --graph-community-generator-lightness: 0.72;
+
   --graph-hull-fill: oklch(0.5 0.05 260 / 0.08);
   --graph-glow: oklch(0.85 0.12 250 / 0.65);
+
+  /*
+   * Deep-Field Observatory Phase 1 (plan Section 3.1 items 1/2/3/4/5;
+   * Section 5.2 "Tokens", per-theme "Graph" family; Section 6 Phase 1:
+   * "Add every additive DTCG token family listed in Section 5.2"). FOUNDATION
+   * ONLY -- declared here so Phases 2-6 have a single, audited, token-driven
+   * source; none of it is wired into rendering yet except where a Phase 1
+   * code path already consumes it (ACES tone mapping at the Canvas;
+   * `readBloomParams`/the terrain-aware lightness branch in
+   * `lib/graph-colors.ts`). Values are Phase 1-authored defaults, tunable
+   * during implementation per Section 5.7's permitted variation, provided
+   * they stay token-driven and both-theme-gated.
+   */
+
+  /* Environment / IBL (Phase 6 wires `scene.environment`/`scene.background`
+     via TerrainEnvironment.tsx; A1/A2 HDRIs are the enhancement, these
+     tokens are the procedural/token fallback per Section 5.4's Fallback
+     contract). */
+  --graph-env-intensity: 1;
+  --graph-env-sky-top: oklch(0.16 0.03 260);
+  --graph-env-sky-horizon: oklch(0.24 0.035 250);
+
+  /* Atmosphere / per-mode fog (Section 5.1 J-CLOUD/J-ORBITAL/J-STRATA/
+     J-TERRAIN; Section 5.3's mode-transition cross-fade interpolates these
+     between modes inside the existing ~800ms envelope). */
+  --graph-atmosphere-fog-color-cloud: oklch(0.14 0.025 260 / 0.6);
+  --graph-atmosphere-fog-color-orbital: oklch(0.13 0.02 250 / 0.55);
+  --graph-atmosphere-fog-color-strata: oklch(0.15 0.02 255 / 0.5);
+  --graph-atmosphere-fog-color-terrain: oklch(0.16 0.03 240 / 0.45);
+  --graph-atmosphere-fog-density-cloud: 0.045;
+  --graph-atmosphere-fog-density-orbital: 0.02;
+  --graph-atmosphere-fog-density-strata: 0.03;
+  --graph-atmosphere-fog-density-terrain: 0.015;
+
+  /* Selective bloom (Phase 4 wires the EffectComposer pass via
+     `readBloomParams`, lib/graph-colors.ts). Half-res, emissive-driven,
+     token-threshold per Section 5.6 item 6 -- bloom is never the sole
+     carrier of a state. */
+  --graph-bloom-threshold: 0.9;
+  --graph-bloom-intensity: 0.6;
+  --graph-bloom-radius: 0.4;
+  --graph-bloom-resolution-scale: 0.5;
+
+  /* Edge weight encoding (Phase 3 wires the fat-line pass). Width in px,
+     opacity 0-1; both interpolate independently of bloom per Section 5.6
+     item 3. */
+  --graph-edge-weight-width-min: 1;
+  --graph-edge-weight-width-max: 4;
+  --graph-edge-weight-opacity-min: 0.25;
+  --graph-edge-weight-opacity-max: 0.9;
+
+  /*
+   * Node material -- fresnel rim + per-instance emissive + non-luminance
+   * outline (Phase 2 wires the `onBeforeCompile` patch). `--graph-node-
+   * outline-color` reuses `--neutral-0` (not a new value) -- verified
+   * (culori `wcagContrast`) to clear >=3:1 against EVERY `--graph-node-*`
+   * type fill and the generative community ramp at every gated hue/chroma
+   * combination (worst case ~7.47:1; see contrast.test.ts). Note: an
+   * outline color that ALSO clears >=3:1 against the literal `--graph-bg`
+   * floor (0.12) is not simultaneously achievable with any single flat
+   * color, because `--graph-bg` and every node/community fill are only
+   * ~8.5:1 apart from each other in this theme (a value 3x-luminance-away
+   * from both endpoints requires the endpoints to be >=9:1 apart) --
+   * verified by direct relative-luminance computation during this phase.
+   * Per Section 5.7's permitted-variation latitude and Section 5.6 item 6
+   * ("outline...always carry [state], [never] the sole carrier"), this
+   * token is tuned to the fill pairing (the outline's primary functional
+   * job -- being visible AS A RING against the node's OWN color); dim/size/
+   * label/emissive/aria remain the redundant carriers against background
+   * separation. Flagged for user/product awareness, not a Phase 1 blocker.
+   */
+  --graph-node-fresnel-power: 2.5;
+  --graph-node-fresnel-intensity: 0.6;
+  --graph-node-emissive-idle: 0;
+  --graph-node-emissive-hover: 0.6;
+  --graph-node-emissive-selected: 1;
+  --graph-node-outline-color: var(--neutral-0);
+  --graph-node-outline-width: 2;
+
+  /* Pattern-id (Phase 2 wires the second data texture). Modulates
+     luminance around the community color -- never hue alone. */
+  --graph-pattern-luminance-delta: 0.18;
+  --graph-pattern-scale: 3;
+
+  /* Two-tier labels (Phase 2 wires the tier system). Sizes in px; outline
+     width in em; `--graph-label-outline-color` mirrors the existing
+     troika 6%-black-outline baseline (Section 3.3), theme-independent by
+     design since it outlines text over the variable 3D scene, not a fixed
+     surface. */
+  --graph-label-tier-community-size: 15;
+  --graph-label-tier-node-size: 12;
+  --graph-label-tier-node-min-size: 10;
+  --graph-label-cap: 40;
+  --graph-label-community-max: 12;
+  --graph-label-outline-width: 0.12;
+  --graph-label-outline-color: var(--neutral-0);
+
+  /* Per-mode metaphor chrome (Phase 5 wires all of the below). Cloud. */
+  --graph-cloud-nebula-color: oklch(0.3 0.06 280 / 0.5);
+  --graph-cloud-nebula-opacity: 0.12;
+
+  /* Orbital. */
+  --graph-orbital-disc-color: oklch(0.35 0.05 250 / 0.4);
+  --graph-orbital-disc-opacity: 0.18;
+  --graph-orbital-ring-color: oklch(0.55 0.06 245 / 0.6);
+  --graph-orbital-ring-width: 1.5;
+  --graph-orbital-core-glow-color: oklch(0.8 0.1 240 / 0.7);
+  --graph-orbital-core-glow-intensity: 0.8;
+  --graph-orbital-ring-inclination: 6;
+
+  /* Strata. */
+  --graph-strata-floor-color: oklch(0.3 0.04 255 / 0.35);
+  --graph-strata-floor-opacity: 0.14;
+  --graph-strata-floor-fog-density: 0.03;
+  --graph-strata-band-rim-color: oklch(0.6 0.08 245 / 0.5);
+  --graph-strata-axis-color: oklch(0.65 0.03 260);
+
+  /* Terrain. Dark theme keeps the existing dusk-skybox identity -- no
+     structural node-lightness override here; that is light-theme-only, per
+     Section 5.2 "Light-theme Terrain" (`--graph-terrain-node-lightness` is
+     intentionally NOT defined in this block -- see
+     `readCommunityGeneratorParams` in lib/graph-colors.ts, which falls back
+     to the theme-wide generator lightness whenever this token is absent). */
+  --graph-terrain-sky-top: oklch(0.18 0.03 255);
+  --graph-terrain-sky-horizon: oklch(0.28 0.04 30);
+  --graph-terrain-hillshade-strength: 0.8;
+  --graph-terrain-contour-major-color: oklch(0.55 0.03 255 / 0.55);
+  --graph-terrain-contour-minor-color: oklch(0.4 0.02 255 / 0.35);
+  --graph-terrain-contour-major-width: 1.5;
+  --graph-terrain-contour-minor-width: 0.75;
+  --graph-terrain-node-outline-color: var(--neutral-0);
+  --graph-terrain-node-outline-width: 2;
 }
 
 [data-theme="light"] {
@@ -53,6 +205,127 @@
   --graph-community-7: var(--ramp-community-7);
   --graph-community-8: var(--ramp-community-8);
 
+  /*
+   * Generative ramp, light theme (plan Section 5.1/5.3/7's flagged, PROPOSED
+   * "optional light-theme `--graph-community-*` lightness override" --
+   * dark-theme values unchanged, only `lightness` moves here). This is the
+   * minimum-lightness-separation fix required for the ramp to clear 3:1
+   * against the light theme's near-white `--color-bg` (see
+   * contrast.test.ts's gating case, plan Section 6.5 item 8): at the
+   * previous shared L=0.72, the fixed 8-slot ramp measured only ~2.2-2.5:1
+   * against light `--color-bg`, well under the 3:1 UI/accent floor, for
+   * EVERY hue -- not merely a higher-count problem. L=0.48 clears >=5:1
+   * across hues 8/16/32-count and the full bounded chroma range, per that
+   * gating test. Adoption of this token family as FINAL (not merely
+   * proposed) still needs the separate Section 7/10.7 user approval; it is
+   * implemented and tested here because Section 6.5 items 5/6/8 require a
+   * working, passing ramp in both themes.
+   */
+  --graph-community-generator-hue-base: 20;
+  --graph-community-generator-chroma-min: 0.12;
+  --graph-community-generator-chroma-max: 0.2;
+  --graph-community-generator-chroma-level-step: 0.015;
+  --graph-community-generator-lightness: 0.48;
+
   --graph-hull-fill: oklch(0.6 0.05 260 / 0.1);
   --graph-glow: oklch(0.6 0.14 250 / 0.55);
+
+  /* Deep-Field Observatory Phase 1 -- see the dark-theme block above for
+     the shared rationale/evidence comments (kept there once, not
+     duplicated per property, per this file's existing convention). */
+
+  --graph-env-intensity: 1.15;
+  --graph-env-sky-top: oklch(0.96 0.015 250);
+  --graph-env-sky-horizon: oklch(0.9 0.02 240);
+
+  --graph-atmosphere-fog-color-cloud: oklch(0.88 0.02 260 / 0.5);
+  --graph-atmosphere-fog-color-orbital: oklch(0.85 0.015 250 / 0.45);
+  --graph-atmosphere-fog-color-strata: oklch(0.86 0.015 255 / 0.4);
+  --graph-atmosphere-fog-color-terrain: oklch(0.9 0.02 240 / 0.35);
+  --graph-atmosphere-fog-density-cloud: 0.045;
+  --graph-atmosphere-fog-density-orbital: 0.02;
+  --graph-atmosphere-fog-density-strata: 0.03;
+  --graph-atmosphere-fog-density-terrain: 0.015;
+
+  --graph-bloom-threshold: 0.9;
+  --graph-bloom-intensity: 0.6;
+  --graph-bloom-radius: 0.4;
+  --graph-bloom-resolution-scale: 0.5;
+
+  --graph-edge-weight-width-min: 1;
+  --graph-edge-weight-width-max: 4;
+  --graph-edge-weight-opacity-min: 0.25;
+  --graph-edge-weight-opacity-max: 0.9;
+
+  /* `--graph-node-outline-color` reuses `--neutral-900` -- verified to
+     clear >=3:1 against every `--graph-node-*` fill and the generative
+     ramp (worst case ~4.27:1); see the dark-theme block's comment for the
+     background-pairing infeasibility evidence, which applies symmetrically
+     here (light `--graph-bg` vs fill contrast is ~4.47-6.11:1, still under
+     the required 9:1 separation for a single color to clear 3:1 against
+     both ends). */
+  --graph-node-fresnel-power: 2.5;
+  --graph-node-fresnel-intensity: 0.6;
+  --graph-node-emissive-idle: 0;
+  --graph-node-emissive-hover: 0.6;
+  --graph-node-emissive-selected: 1;
+  --graph-node-outline-color: var(--neutral-900);
+  --graph-node-outline-width: 2;
+
+  --graph-pattern-luminance-delta: 0.18;
+  --graph-pattern-scale: 3;
+
+  --graph-label-tier-community-size: 15;
+  --graph-label-tier-node-size: 12;
+  --graph-label-tier-node-min-size: 10;
+  --graph-label-cap: 40;
+  --graph-label-community-max: 12;
+  --graph-label-outline-width: 0.12;
+  --graph-label-outline-color: var(--neutral-0);
+
+  --graph-cloud-nebula-color: oklch(0.8 0.03 280 / 0.4);
+  --graph-cloud-nebula-opacity: 0.12;
+
+  --graph-orbital-disc-color: oklch(0.75 0.03 250 / 0.35);
+  --graph-orbital-disc-opacity: 0.15;
+  --graph-orbital-ring-color: oklch(0.55 0.05 245 / 0.55);
+  --graph-orbital-ring-width: 1.5;
+  --graph-orbital-core-glow-color: oklch(0.7 0.08 240 / 0.6);
+  --graph-orbital-core-glow-intensity: 0.7;
+  --graph-orbital-ring-inclination: 6;
+
+  --graph-strata-floor-color: oklch(0.82 0.02 255 / 0.3);
+  --graph-strata-floor-opacity: 0.12;
+  --graph-strata-floor-fog-density: 0.03;
+  --graph-strata-band-rim-color: oklch(0.55 0.05 245 / 0.45);
+  --graph-strata-axis-color: oklch(0.4 0.02 260);
+
+  /*
+   * Terrain, light theme (structural, plan Section 5.2 "Light-theme
+   * Terrain"): a bright high-key sky PAIRED WITH darkened graph elements
+   * via `--graph-terrain-node-lightness` -- read by
+   * `readCommunityGeneratorParams(root, "terrain")`
+   * (lib/graph-colors.ts) INSTEAD OF the theme-wide
+   * `--graph-community-generator-lightness` above, whenever mode is
+   * Terrain. Defined ONLY in this light-theme block (dark-theme Terrain is
+   * unchanged, matching the generator's own "dark-theme values unchanged"
+   * precedent above) -- the JS branch keys off this token's mere
+   * presence/absence, not a theme check. Verified (culori `wcagContrast`):
+   * lightness 0.38 at every gated hue/chroma clears >=7.19:1 against both
+   * `--graph-terrain-sky-top` and `-horizon` below (well over the required
+   * 3:1); see contrast.test.ts. `--graph-terrain-node-outline-color` is a
+   * darkened, non-luminance outline that (with `-hillshade-strength`)
+   * reinforces the same node-vs-sky separation independent of sky
+   * brightness (verified >=14.2:1 against both sky tokens).
+   */
+  --graph-terrain-sky-top: oklch(0.97 0.015 245);
+  --graph-terrain-sky-horizon: oklch(0.92 0.02 60);
+  --graph-terrain-hillshade-strength: 0.8;
+  --graph-terrain-contour-major-color: oklch(0.35 0.02 255 / 0.6);
+  --graph-terrain-contour-minor-color: oklch(0.55 0.015 255 / 0.4);
+  --graph-terrain-contour-major-width: 1.5;
+  --graph-terrain-contour-minor-width: 0.75;
+  --graph-terrain-node-lightness: 0.38;
+  --graph-terrain-node-outline-color: oklch(0.2 0.02 260);
+  --graph-terrain-node-outline-width: 2;
 }

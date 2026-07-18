@@ -10,15 +10,21 @@ this *module* (or the rest of the package) never requires the optional
 ``web`` extra to be installed; only actually calling :func:`create_app` does.
 """
 
+import json
 import os
+import shutil
+import tempfile
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
 from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.graph.communities import project_node_enrichment
 from mythic_proportion.graph.store import GraphStore
+from mythic_proportion.graph.tuples import normalize_title
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.retrieve import hybrid_search
 from mythic_proportion.index.store import IndexStore
@@ -45,6 +51,161 @@ _VALID_PROVIDERS = {"authhub", "anthropic", "ollama"}
 #: AuthHub's "list models" endpoint (sibling of the chat-completions path used
 #: by :mod:`mythic_proportion.llm.authhub`).
 _MODELS_PATH = "/api/v1/ai/models"
+
+# ---------------------------------------------------------------------------
+# Security hardening (Phase 3, Section 6.2(a)): CORS + CSRF + an upload cap.
+# ---------------------------------------------------------------------------
+
+#: Known local origins this app is actually served/developed from: the
+#: built/prod SPA served by `mythic serve` (default `127.0.0.1:8765`) and the
+#: Vite dev server (default `localhost:5173`) -- both `127.0.0.1` and
+#: `localhost` forms, since browsers treat them as distinct origins. This is
+#: intentionally a small, closed allowlist, not a wildcard: this app is a
+#: local single-user tool with no legitimate cross-origin caller.
+ALLOWED_ORIGINS: frozenset[str] = frozenset(
+    {
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    }
+)
+
+#: Every state-changing `/api/*` POST route (Section 6.2(a)/3.3). Reads
+#: (`GET`) are never CSRF-protected -- browsers don't need same-origin
+#: confirmation to *read* a response their own script can't access
+#: cross-origin anyway (that's CORS's job); the concrete risk this closes is
+#: a malicious page tricking the browser into *sending* one of these
+#: mutating requests to a locally-running server.
+CSRF_PROTECTED_PATHS: frozenset[str] = frozenset(
+    {"/api/upload", "/api/ingest", "/api/index-graph", "/api/lint/fix", "/api/config"}
+)
+
+#: Generous cap for personal-vault documents (Markdown, PDFs, etc.) dropped
+#: via `POST /api/upload` -- large enough for real source material, small
+#: enough to stop an accidental or hostile multi-GB request from filling the
+#: disk / tying up the single-worker ingest queue.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
+def _active_provider_label(settings: Settings) -> str:
+    """A human-readable label for whichever provider ``settings`` actually
+    routes through right now -- mirrors the exact same precedence
+    ``query.engine._default_client``/``_default_extraction_client`` use
+    (``local`` wins unconditionally, then explicit ``llm_provider``).
+    Browser-audit item 4 (trust finding): used so an error message never
+    hardcodes "via AuthHub" when the real active provider is Ollama or
+    Anthropic."""
+    if settings.local or settings.llm_provider == "ollama":
+        return f"Ollama at {settings.ollama_base_url}"
+    if settings.llm_provider == "anthropic":
+        return "Anthropic"
+    return f"AuthHub at {authhub_base_url(settings)}"
+
+
+def _merge_page_backed_entities(
+    page_nodes: list[dict[str, Any]],
+    page_edges: list[dict[str, str]],
+    entity_nodes: list[dict[str, Any]],
+    entity_edges: list[dict[str, Any]],
+    page_source_hashes: dict[str, str],
+    entity_source_stems: dict[str, set[str]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Identity dedup for ``GET /api/graph?mode=both`` (T3 advisory H1, the
+    confirmed root cause of the "Meridian Logistics" framing defect): the raw
+    union shows any wiki-page-backed entity as TWO same-labeled nodes -- a
+    page node (id = file path) and an entity node (id = ``entity:<int>``) --
+    at two different force-layout positions. When the page twin is isolated
+    (its body uses no ``[[wikilinks]]``), clicking it framed a degenerate
+    one-point set on an unrelated patch of space with no edge in sight.
+
+    Identity requires BOTH conditions (Codex CODE_REVIEW finding J-001: a
+    title-string match alone is NOT identity -- a page coincidentally sharing
+    a title with an unrelated, independently-extracted entity must never be
+    fused, since fusing silently misattributes the entity's relationships and
+    enrichment to the wrong page):
+
+    1. **Unambiguous title match**: the page node and entity node's
+       ``normalize_title`` keys match **exactly 1:1**.
+    2. **Shared extraction provenance**: ``page_source_hashes[page id]`` (the
+       page's frontmatter ``source_hash`` -- the content hash of the ingested
+       raw document the compile pipeline generated the page from) names a
+       document stem in ``entity_source_stems[entity id]`` (the stems of the
+       ``text_units.page_path`` documents, e.g. ``raw/<content-hash>.md``,
+       the entity was actually extracted from -- see
+       ``GraphStore.entity_source_page_paths``). A hand-authored page (no
+       ``source_hash``) or an entity extracted only from other documents
+       therefore never merges, by construction.
+
+    A qualifying pair merges into one node:
+
+    * The **page** node survives unchanged (id/label/type/kind) -- its path id
+      is load-bearing client-side (reading-pane fetch, Open-in-Wiki, Cmd+K
+      graph jump all use page paths as node ids).
+    * The entity twin's additive enrichment (``community``/``level``/
+      ``centrality``/``parentCommunity``, when projected) rides onto the
+      merged node, plus an ``entityId`` marker naming the absorbed twin. The
+      entity-only ``degree`` field is deliberately dropped: it counts only
+      relationship edges, so the client's own union-edge count (its documented
+      fallback when ``degree`` is absent) is the correct value here.
+    * The entity twin's edges are remapped onto the page id. A page
+      (wikilink) edge whose (source, target) pair collides with a remapped
+      relationship edge is dropped in favor of the richer typed/weighted one.
+
+    An ambiguous match (several pages sharing a title, or several entities --
+    e.g. one title under two types) is never merged, regardless of
+    provenance: identity cannot be resolved safely, so those nodes pass
+    through exactly as before.
+    """
+    pages_by_key: dict[str, list[dict[str, Any]]] = {}
+    for node in page_nodes:
+        key = normalize_title(str(node["label"]))
+        if key:
+            pages_by_key.setdefault(key, []).append(node)
+    entities_by_key: dict[str, list[dict[str, Any]]] = {}
+    for node in entity_nodes:
+        key = normalize_title(str(node["label"]))
+        if key:
+            entities_by_key.setdefault(key, []).append(node)
+
+    id_remap: dict[str, str] = {}
+    extras_by_page_id: dict[str, dict[str, Any]] = {}
+    for key, pages in pages_by_key.items():
+        entities = entities_by_key.get(key)
+        if entities is None or len(pages) != 1 or len(entities) != 1:
+            continue
+        page, entity = pages[0], entities[0]
+        # J-001 provenance gate: the title match above is necessary but not
+        # sufficient -- the page must have been compiled from a document the
+        # entity was actually extracted from.
+        source_hash = page_source_hashes.get(page["id"])
+        if not source_hash or source_hash not in entity_source_stems.get(entity["id"], set()):
+            continue
+        id_remap[entity["id"]] = page["id"]
+        extra = {k: v for k, v in entity.items() if k not in ("id", "label", "type", "kind", "degree")}
+        extra["entityId"] = entity["id"]
+        extras_by_page_id[page["id"]] = extra
+
+    nodes: list[dict[str, Any]] = []
+    for node in page_nodes:
+        merged_extra = extras_by_page_id.get(node["id"])
+        nodes.append({**node, **merged_extra} if merged_extra else node)
+    nodes.extend(node for node in entity_nodes if node["id"] not in id_remap)
+
+    remapped_entity_edges: list[dict[str, Any]] = []
+    entity_pairs: set[tuple[str, str]] = set()
+    for edge in entity_edges:
+        source = id_remap.get(edge["source"], edge["source"])
+        target = id_remap.get(edge["target"], edge["target"])
+        if source == target:
+            continue  # defensive: a merge must never manufacture a self-loop
+        remapped_entity_edges.append({**edge, "source": source, "target": target})
+        entity_pairs.add((source, target))
+
+    kept_page_edges: list[dict[str, Any]] = [
+        edge for edge in page_edges if (edge["source"], edge["target"]) not in entity_pairs
+    ]
+    return nodes, kept_page_edges + remapped_entity_edges
 
 
 class QueryRequest(BaseModel):
@@ -88,6 +249,82 @@ class ConfigUpdateRequest(BaseModel):
     auto_build_graph: bool | None = None
 
 
+class _UploadSizeLimitMiddleware:
+    """Pure-ASGI middleware -- raw ``scope``/``receive``/``send``, not
+    Starlette's ``Request``-based ``@app.middleware("http")``, which would
+    require fully buffering the request body into a ``Request`` object
+    before any of *our* code ever saw it, defeating the point -- that
+    counts bytes as they stream in from the ASGI server for
+    ``POST /api/upload`` specifically, and aborts with 413 the moment the
+    cumulative body size exceeds ``max_bytes``, BEFORE Starlette's
+    multipart parser (triggered by FastAPI's ``UploadFile`` dependency
+    injection, which fully parses the body before the route handler ever
+    runs) ever sees the excess bytes.
+
+    Closes Codex J-001 (upload resource exhaustion, Section 6.2(a)
+    remediation cycle): the previous ``Content-Length`` header check plus a
+    post-hoc per-file byte tally inside the route handler both ran only
+    AFTER ``UploadFile`` DI had already fully parsed the request body -- a
+    missing/understated ``Content-Length`` with a large actual body could
+    exhaust memory/disk before either check ever fired. This buffers at
+    most ``max_bytes`` (plus one final chunk) in memory before either
+    replaying it to the app (under budget) or rejecting outright (over
+    budget) -- never the whole, unbounded body.
+
+    Defined at module level, importing nothing from ``fastapi``/
+    ``starlette`` (raw ASGI dict messages only), matching this module's own
+    "importable without the ``web`` extra" contract.
+    """
+
+    def __init__(self, app: Any, *, max_bytes: int, path: str = "/api/upload") -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+        self.path = path
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != self.path:
+            await self.app(scope, receive, send)
+            return
+
+        buffered: list[dict[str, Any]] = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                buffered.append(message)
+                break
+            total += len(message.get("body", b"")) if isinstance(message.get("body"), (bytes, bytearray)) else 0
+            if total > self.max_bytes:
+                detail = f"upload too large: exceeds the {self.max_bytes}-byte cap"
+                body = json.dumps({"detail": detail}).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                # Drain any remaining body chunks off the wire so the ASGI
+                # server doesn't hang waiting for us to consume them.
+                while message.get("more_body", False):
+                    message = await receive()
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
+
+        buffer_iter = iter(buffered)
+
+        async def replay_receive() -> dict[str, Any]:
+            try:
+                return next(buffer_iter)
+            except StopIteration:
+                return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
 def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     """Build a FastAPI app serving the JSON API + SPA for the vault at ``vault_root``.
 
@@ -96,8 +333,9 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     without them.
     """
     try:
-        from fastapi import FastAPI, File, HTTPException, UploadFile
-        from fastapi.responses import HTMLResponse
+        from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+        from fastapi.middleware.cors import CORSMiddleware
+        from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:  # pragma: no cover - exercised only when fastapi absent
         raise RuntimeError(
@@ -117,6 +355,61 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     # runtime, with every route below reading `app.state.settings` picking up
     # the change immediately -- no restart required.
     app.state.settings = settings
+
+    # CORS (Section 6.2(a)): locked down to the known local origins above --
+    # never a wildcard. `allow_credentials=False` because this app uses no
+    # cookies/session auth at all (every credential is env-only, read
+    # server-side -- see `config.authhub_api_key`); leaving it `False` also
+    # keeps the CORS spec's "no wildcard + credentials" restriction moot.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=sorted(ALLOWED_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+
+    # Codex J-001 remediation: streams-and-counts `/api/upload`'s request
+    # body BEFORE FastAPI's `UploadFile` dependency injection ever parses
+    # it -- see `_UploadSizeLimitMiddleware`'s own docstring for why the
+    # in-handler checks below are no longer the primary enforcement point.
+    app.add_middleware(_UploadSizeLimitMiddleware, max_bytes=MAX_UPLOAD_BYTES)
+
+    @app.middleware("http")
+    async def _csrf_protection(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """CSRF check for state-changing `/api/*` POST routes (Section
+        6.2(a)/3.3). CORS alone only stops a cross-origin page's script from
+        *reading* this app's response -- it does not stop the browser from
+        *sending* a same-request-shape POST in the first place (e.g. a bare
+        `fetch`/`<form>` submit, which isn't blocked by CORS pre-send). This
+        origin/referer check closes that gap: a real browser always sends an
+        `Origin` (or, failing that, `Referer`) header on a cross-origin POST,
+        and increasingly on same-origin POSTs too; a request whose declared
+        origin doesn't match one of `ALLOWED_ORIGINS` is rejected outright.
+        A request with *neither* header present (curl, a non-browser local
+        client, `TestClient`) is allowed through -- this is a browser-CSRF
+        defense specifically, not a general auth boundary (this app has none
+        -- see the CORS comment above), and every non-browser caller already
+        has direct, unmediated access to the same local API regardless.
+        """
+        if request.method == "POST" and request.url.path in CSRF_PROTECTED_PATHS:
+            candidate = request.headers.get("origin")
+            if candidate is None:
+                referer = request.headers.get("referer")
+                if referer:
+                    parsed = urlsplit(referer)
+                    if parsed.scheme and parsed.netloc:
+                        candidate = f"{parsed.scheme}://{parsed.netloc}"
+            if candidate is not None and candidate not in ALLOWED_ORIGINS:
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            f"CSRF check failed: origin {candidate!r} is not an allowed local origin"
+                        )
+                    },
+                )
+        return await call_next(request)
 
     # Single-worker background ingest queue (see `web.jobs`): started here,
     # synchronously, rather than gated behind a FastAPI startup event, so it
@@ -141,12 +434,52 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     # /app -- guarded so this no-ops entirely if `npm run build` has never
     # been run (e.g. a fresh clone without the web/ toolchain). The legacy
     # SPA at "/" above is unaffected either way (parity requirement).
+    #
+    # Browser-audit item 2 (BLOCKING): a plain `StaticFiles(html=True)`
+    # mount only serves `index.html` for the mount root itself -- a direct
+    # URL or hard refresh on any client-side SPA sub-route (`/app/graph`,
+    # `/app/search`, ...) isn't a real file under `static_next/`, so it 404s
+    # with the raw backend `{"detail": "Not Found"}` instead of ever
+    # reaching React Router. This is the standard SPA-fallback pattern
+    # instead: a real file under `static_next/` (including any hashed
+    # `assets/*` build chunk) is served as-is; anything else under `/app`
+    # falls back to `index.html`, letting the client-side router resolve
+    # the actual route -- EXCEPT a missing `assets/*` path, which stays a
+    # genuine 404 rather than being silently masked as a working route.
     if STATIC_NEXT_DIR.is_dir():
-        app.mount(
-            "/app",
-            StaticFiles(directory=str(STATIC_NEXT_DIR), html=True),
-            name="static_next",
-        )
+        static_next_root = STATIC_NEXT_DIR.resolve()
+
+        @app.get("/app")
+        @app.get("/app/{full_path:path}")
+        def spa_app(full_path: str = "") -> Any:
+            candidate = (STATIC_NEXT_DIR / full_path).resolve()
+            try:
+                candidate.relative_to(static_next_root)
+            except ValueError:
+                # Path-traversal attempt (e.g. `/app/../../etc/passwd`) --
+                # never serve anything outside static_next/.
+                raise HTTPException(status_code=404, detail="Not Found") from None
+            if candidate.is_file():
+                return FileResponse(candidate)
+            # Codex J-003 (remediation cycle): only fall back to `index.html`
+            # for a genuine bare client-side route (e.g. `/app/graph`) --
+            # anything that LOOKS like a reference to a static file (lives
+            # under `assets/`, or its final path segment carries a file
+            # extension, e.g. `favicon.ico`, `manifest.webmanifest`, a
+            # missing root-level `.css`/`.js`) must stay a real 404 when
+            # missing. The previous `assets/`-only check silently served
+            # `index.html` (200) for any OTHER missing static reference,
+            # masking a genuinely broken/stale one instead of surfacing it.
+            # A dotfile-style final segment (e.g. `.well-known/...`) is
+            # deliberately NOT treated as file-shaped -- it has no
+            # extension of its own, just a leading dot.
+            last_segment = full_path.rsplit("/", 1)[-1]
+            looks_like_a_static_file = full_path.startswith("assets/") or (
+                "." in last_segment and not last_segment.startswith(".")
+            )
+            if looks_like_a_static_file:
+                raise HTTPException(status_code=404, detail=f"not found: {full_path!r}")
+            return FileResponse(STATIC_NEXT_DIR / "index.html")
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -242,7 +575,12 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
                 store.reindex(vault_root)
                 hits = hybrid_search(store, req.question, k=req.k)
             response: dict[str, Any] = {
-                "text": f"LLM unavailable via AuthHub at {authhub_base_url(current_settings)}: {exc}",
+                # Browser-audit item 4 (trust finding): this message used to
+                # hardcode "via AuthHub" unconditionally, regardless of which
+                # provider was actually configured/attempted -- misleading
+                # when the active provider was Ollama (local mode) or
+                # Anthropic. `_active_provider_label` reports the real one.
+                "text": f"LLM unavailable via {_active_provider_label(current_settings)}: {exc}",
                 "citations": [],
                 "hits": [asdict(hit) for hit in hits],
                 "used_llm": False,
@@ -287,7 +625,10 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
           weighted relationship edges) populated by `mythic index-graph`
           (empty nodes/edges if that has never been run).
         * `both` -- the union of the two, with `"kind": "page"|"entity"` on
-          every node so callers can tell them apart.
+          every node so callers can tell them apart. A wiki-page-backed
+          entity (page title and entity title normalize identically, 1:1) is
+          returned as ONE merged node, not two same-labeled twins -- see
+          :func:`_merge_page_backed_entities` for the full dedup contract.
         """
         if mode not in ("wikilinks", "entities", "both"):
             raise HTTPException(
@@ -323,14 +664,57 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         # `_sync_embedder_meta` wipes pages/pages_fts/page_vectors/vec_pages
         # as a result. This open must never touch that state.
         with IndexStore(vault_root, embedder=None, sync_embedder=False) as store:
-            entity_nodes, entity_edges = GraphStore(store.conn).read_entity_graph()
+            graph_store = GraphStore(store.conn)
+            entity_nodes, entity_edges = graph_store.read_entity_graph()
+            # mode=both identity-dedup input (Codex J-001 provenance gate):
+            # each entity's extraction-source document stems, matched below
+            # against page frontmatter `source_hash` values. Read inside this
+            # same store open; skipped entirely for mode=entities.
+            entity_source_stems: dict[str, set[str]] = {}
+            if mode == "both":
+                entity_source_stems = {
+                    f"entity:{entity_id}": {PurePosixPath(page_path).stem for page_path in paths}
+                    for entity_id, paths in graph_store.entity_source_page_paths().items()
+                }
+            # Phase 4b (plan Section 6.4/7): additive per-node Leiden
+            # community/level/centrality projection -- a PROJECTION of
+            # already-computed data (`graph/communities.py`,
+            # `store.community_memberships`/`max_community_level`), never new
+            # graph computation. Entities absent from the `communities` table
+            # (e.g. never Leiden-clustered, or `mythic index-graph` has never
+            # run) simply get no extra keys here -- the response shape stays
+            # byte-identical to the pre-Phase-4b shape for those nodes, which
+            # is exactly what lets the client's `deriveVizGraph` fall back to
+            # its own union-find grouping (plan Section 7's backward-
+            # compatibility requirement).
+            entity_ids = [int(node["id"].removeprefix("entity:")) for node in entity_nodes]
+            enrichment = project_node_enrichment(store.conn, entity_ids)
+            for node, entity_id in zip(entity_nodes, entity_ids):
+                extra = enrichment.get(entity_id)
+                if extra is not None:
+                    node.update(extra)
 
         if mode == "entities":
             return {"nodes": entity_nodes, "edges": entity_edges}
 
-        # mode == "both"
+        # mode == "both": identity-dedup the union so a wiki-page-backed
+        # entity appears exactly once (see _merge_page_backed_entities --
+        # requires BOTH a 1:1 title match and shared extraction provenance).
+        page_source_hashes: dict[str, str] = {}
+        for page in pages:
+            raw_source_hash = page.frontmatter.get("source_hash")
+            if raw_source_hash:
+                page_source_hashes[page.path] = str(raw_source_hash)
         kinded_page_nodes = [{**node, "kind": "page"} for node in page_nodes]
-        return {"nodes": kinded_page_nodes + entity_nodes, "edges": page_edges + entity_edges}
+        merged_nodes, merged_edges = _merge_page_backed_entities(
+            kinded_page_nodes,
+            page_edges,
+            entity_nodes,
+            entity_edges,
+            page_source_hashes,
+            entity_source_stems,
+        )
+        return {"nodes": merged_nodes, "edges": merged_edges}
 
     @app.post("/api/ingest")
     def api_ingest() -> dict[str, Any]:
@@ -343,21 +727,85 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         return {"job_id": job_id}
 
     @app.post("/api/upload")
-    async def api_upload(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    async def api_upload(request: Request, files: list[UploadFile] = File(...)) -> dict[str, Any]:
         """Save uploaded files into ``drop/`` (fast, stays in this request),
         then enqueue an ingest job and return its id immediately -- compile
         happens on the background worker, not here. Poll
         ``GET /api/ingest/status`` for progress.
+
+        Section 6.2(a): the request body is capped at :data:`MAX_UPLOAD_BYTES`
+        by ``_UploadSizeLimitMiddleware``, which streams and counts the raw
+        ASGI body BEFORE ``UploadFile`` dependency injection (i.e. before
+        this function even starts running) ever parses it -- see that
+        class's docstring (Codex J-001 remediation). The
+        ``Content-Length``/byte-tally checks below are now a cheap,
+        redundant defense-in-depth backstop, not the primary guard.
+
+        Codex J-002 remediation (atomicity): every file in the request is
+        first written to a private temporary staging directory; only once
+        ALL of them have staged successfully are they moved into ``drop/``.
+        Any failure partway through (the cap, a write error, anything)
+        leaves ``drop/`` completely untouched -- no partial upload can land
+        there for a request that ultimately fails, where a later
+        ``/api/ingest`` call might otherwise silently pick it up. The
+        staging directory itself is always cleaned up (success or failure).
         """
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload too large: exceeds the {MAX_UPLOAD_BYTES}-byte cap",
+                    )
+            except ValueError:
+                pass  # malformed header -- fall through to the byte-count backstop below
+
         drop_dir = vault_root / "drop"
         drop_dir.mkdir(parents=True, exist_ok=True)
-        saved: list[str] = []
-        for upload in files:
-            name = Path(upload.filename or "upload.bin").name  # strip any path components
-            dest = drop_dir / name
-            contents = await upload.read()
-            dest.write_bytes(contents)
-            saved.append(name)
+        staged: list[tuple[Path, str]] = []
+        total_bytes = 0
+        with tempfile.TemporaryDirectory(prefix="mp-upload-staging-") as staging_dir_str:
+            staging_dir = Path(staging_dir_str)
+            for upload in files:
+                name = Path(upload.filename or "upload.bin").name  # strip any path components
+                contents = await upload.read()
+                total_bytes += len(contents)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    # `TemporaryDirectory`'s context manager cleans up every
+                    # staged file below on this early return -- nothing
+                    # partial ever reaches `drop/`.
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload too large: exceeds the {MAX_UPLOAD_BYTES}-byte cap",
+                    )
+                staged_path = staging_dir / name
+                staged_path.write_bytes(contents)
+                staged.append((staged_path, name))
+
+            # Every file staged successfully -- now, and only now, move each
+            # into `drop/`. `shutil.move` is safe across the staging
+            # tempdir's filesystem and the vault's own (possibly different
+            # drive on Windows), and each move is effectively instantaneous
+            # local disk I/O, so this window is as small as it can be. If
+            # a LATER move still fails partway through this loop (a real
+            # I/O error, not a cap trip), roll back every file that DID
+            # already land in `drop/` before re-raising -- a request that
+            # ultimately fails must never leave a partial upload behind for
+            # a later `/api/ingest` call to silently pick up.
+            saved: list[str] = []
+            moved_dests: list[Path] = []
+            try:
+                for staged_path, name in staged:
+                    dest = drop_dir / name
+                    shutil.move(str(staged_path), str(dest))
+                    moved_dests.append(dest)
+                    saved.append(name)
+            except OSError as exc:
+                for dest in moved_dests:
+                    dest.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail=f"upload failed: {exc}") from exc
+
         job_id = app.state.ingest_worker.enqueue()
         return {"job_id": job_id, "saved": saved}
 
@@ -443,6 +891,21 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             has_api_key = bool(authhub_api_key())
         else:
             has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # Browser-audit item 4 (trust finding): `local: true` overrides
+        # routing to Ollama unconditionally (see
+        # `query.engine._default_client`'s docstring -- that enforcement was
+        # already correct), but the raw `provider`/`model` fields below stay
+        # untouched by that override (so turning `local` back off restores
+        # them). Without a distinct "what's actually active right now"
+        # field, a client (the Ask view's model hint, in particular) had no
+        # way to show anything other than the raw stored fields -- e.g.
+        # "deepseek-chat (authhub)" -- even while `local: true` meant every
+        # real call was routed to Ollama, which read as "local mode isn't
+        # enforced" even though the actual routing always was. These two
+        # additive fields are the fix: the actually-active provider/model.
+        effective_local = current_settings.local or current_settings.llm_provider == "ollama"
+        effective_provider = "ollama" if effective_local else current_settings.llm_provider
+        effective_model = current_settings.ollama_model if effective_local else current_settings.llm_model
         return {
             "provider": current_settings.llm_provider,
             "model": current_settings.llm_model,
@@ -457,6 +920,9 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
             "embeddings_backend": current_settings.embeddings_backend,
             # Bugfix DEFECT 1 addition -- strictly additive.
             "auto_build_graph": current_settings.auto_build_graph,
+            # Browser-audit item 4 additions -- strictly additive.
+            "effective_provider": effective_provider,
+            "effective_model": effective_model,
         }
 
     @app.post("/api/config")
@@ -547,13 +1013,27 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
     @app.get("/api/models")
     def api_models() -> dict[str, Any]:
         current_settings = app.state.settings
-        base_url = authhub_base_url(current_settings)
-        api_key = authhub_api_key()
         result: dict[str, Any] = {
             "models": [],
             "current": current_settings.llm_model,
             "provider": current_settings.llm_provider,
         }
+        # Browser-audit item 4 (contradictory-copy finding): this endpoint
+        # only ever lists AuthHub's model catalog, so it must not report an
+        # "AUTHHUB_API_KEY is not set" error when the active provider isn't
+        # even routed through AuthHub -- that's exactly what previously
+        # produced the observed contradiction ("AUTHHUB_API_KEY is not set"
+        # displayed directly alongside "An API key is configured for this
+        # provider", which `/api/config`'s `has_api_key` correctly reports
+        # as `true` for local/Ollama). Ollama has no remote model-list API
+        # at all, so this simply steps aside with a neutral, accurate
+        # message instead of guessing.
+        if current_settings.local or current_settings.llm_provider == "ollama":
+            result["error"] = "Provider is Ollama (local mode) -- enter a model slug manually."
+            return result
+
+        base_url = authhub_base_url(current_settings)
+        api_key = authhub_api_key()
         if not api_key:
             result["error"] = "AUTHHUB_API_KEY is not set: falling back to free-text model entry"
             return result

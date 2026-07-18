@@ -1,17 +1,24 @@
 # Mythic Proportion
 
-An **LLM-Wiki second brain** with an auto-ingesting drop folder. Drop any
+An **LLM-Wiki second brain** with an auto-ingesting drop folder, a
+GraphRAG-backed knowledge graph, and a 3D interactive graph viewer. Drop any
 document, image, or artifact into `vault/drop/`; the system parses it,
 preserves the immutable original in `vault/raw/`, and compiles it into a
 persistent, self-linking, Obsidian-compatible Markdown knowledge graph —
-searchable via a local SQLite hybrid-search sidecar, and optionally kept live
-with a real-time watcher.
+searchable via a local SQLite hybrid-search sidecar, optionally kept live
+with a real-time watcher, and explorable through a React/Three.js web app at
+`/app` with four switchable 3D/2D graph representations.
 
-See `specs/mythic-proportion.html` for the full implementation plan, and
-`docs/architecture.md` / `docs/usage.md` / `docs/obsidian.md` for the deeper
-docs. All seven build phases (project scaffold, ingestion core, LLM compile,
-hybrid index, query & lint, the optional watcher + Obsidian polish, and the
-local web UI) are complete.
+See `specs/mythic-proportion.html` and
+`specs/mythic-proportion-3d-graphrag.html` for the full implementation plans,
+and `docs/architecture.md` / `docs/usage.md` / `docs/frontend.md` /
+`docs/obsidian.md` for the deeper docs. The core LLM-Wiki pipeline (project
+scaffold, ingestion, LLM compile, hybrid index, query & lint, the optional
+watcher, and the web UI) plus the GraphRAG data layer, community detection,
+retrieval modes, the 3D graph frontend, and a local privacy layer are all
+complete and merged to `main`. An agent layer, an MCP server, a broader
+ComfyUI asset pipeline, and retirement of the legacy `/` single-page app
+remain deferred, unbuilt future work (see "What's not built yet" below).
 
 ## 60-second quickstart
 
@@ -25,13 +32,18 @@ python -m pip install -e ".[dev]"
 mythic init ./my-vault
 
 # A working LLM provider is required for compile/query (see "LLM provider
-# configuration" below) -- set AUTHHUB_API_KEY (default provider, AuthHub)
-# or ANTHROPIC_API_KEY (MYTHIC_LLM_PROVIDER=anthropic) first.
+# configuration" below) -- set AUTHHUB_API_KEY (default provider, AuthHub),
+# ANTHROPIC_API_KEY (MYTHIC_LLM_PROVIDER=anthropic), or point at a local
+# Ollama model (MYTHIC_LLM_PROVIDER=ollama) first.
 
 # Drop something in, then ingest it (parses, dedups, files it in raw/, and
 # compiles it into wiki pages via the configured LLM provider):
 cp some-report.pdf ./my-vault/drop/
 mythic ingest ./my-vault
+
+# Build the knowledge graph (hierarchical Leiden communities, entities,
+# relationships, claims) so the Graph view has real data to show:
+mythic index-graph --vault ./my-vault
 
 # Ask a question (synthesized + cited via the configured LLM provider):
 mythic query "what did that report say?" --vault ./my-vault
@@ -43,10 +55,13 @@ mythic lint ./my-vault
 # (requires: pip install 'mythic-proportion[watch]'):
 mythic watch ./my-vault
 
-# Optional: run the local web UI (requires: pip install 'mythic-proportion[web]'):
+# Optional: run the local web UI (requires: pip install 'mythic-proportion[web]').
+# The React frontend at /app is not committed to the repo -- build it once
+# per checkout before serving (see "Web UI" below):
+cd web && npm install && npm run build && cd ..
 mythic serve --vault ./my-vault
 
-# List all six commands:
+# List all seven public commands (plus two hidden utility commands):
 mythic --help
 ```
 
@@ -54,18 +69,18 @@ Open `./my-vault` directly in Obsidian — see `docs/obsidian.md`.
 
 ## Web UI
 
-`mythic serve --vault ./my-vault` starts a local FastAPI + vanilla-JS SPA at
-`http://127.0.0.1:8765/` (override with `--host`/`--port`; pass `--no-browser`
-to skip auto-opening it). It wraps the exact same building blocks as the CLI
-across six tabs:
+`mythic serve --vault ./my-vault` starts a local FastAPI server at
+`http://127.0.0.1:8765/` by default (override with `--host`/`--port`; pass
+`--no-browser` to skip auto-opening it). It serves two frontends side by
+side, wrapping the exact same building blocks the CLI uses:
 
-- **Wiki** — browse pages, rendered Markdown with live wikilinks.
-- **Search** — hybrid BM25 + vector search over the vault.
-- **Ask** — synthesized, cited question answering.
-- **Graph** — the wikilink network as a node/edge graph.
-- **Ingest** — drag-and-drop upload into `drop/`, or trigger an ingest cycle
-  over files already there.
-- **Lint** — vault health check, with a one-click fix action.
+- **`/app`** — the current React + React-Three-Fiber frontend. Requires a
+  one-time frontend build (`cd web && npm install && npm run build`, which
+  writes `src/mythic_proportion/web/static_next/`); the build output is not
+  committed to the repository, so run this fresh after any checkout. If the
+  build hasn't been run, `/app` returns 404.
+- **`/`** — the original vanilla-JS single-page app, preserved unchanged
+  for parity. Retiring it is explicitly deferred, non-scheduled future work.
 
 Requires the optional `web` extra:
 
@@ -73,11 +88,118 @@ Requires the optional `web` extra:
 pip install 'mythic-proportion[web]'
 ```
 
+### Seven views
+
+- **Wiki** — browse pages, rendered Markdown with live wikilinks.
+- **Search** — hybrid BM25 + vector search over the vault.
+- **Ask** — synthesized, cited question answering.
+- **Graph** — the knowledge graph, in four switchable representations (see
+  below).
+- **Ingest** — drag-and-drop upload into `drop/`, or trigger an ingest cycle
+  over files already there, plus a "Build Knowledge Graph" action that runs
+  `mythic index-graph`.
+- **Lint** — vault health check, with a one-click fix action.
+- **Settings** — LLM provider/model/base-URL configuration, including the
+  optional auto-build-graph-after-ingest toggle (off by default).
+
+Wiki, Search, Ask, and Graph share a first-class reading/detail pane with a
+consistent loading/empty/error/populated state contract across all four
+views. `Cmd+K` (`Ctrl+K` on Windows/Linux, also reachable via a visible
+header button) opens a command palette with grouped sections — Navigate (any
+of the seven tabs), Pages (jump to a Wiki page), Graph (focus a page's node
+in Graph), and Actions (Run Ask, Open Ingest) — with typed filtering,
+arrow-key navigation, Enter to activate, Escape to close with focus
+restored, and defined empty/no-results states. Tab navigation uses real
+links with `aria-current="page"` plus a non-color underline/bold cue, while
+still behaving as an in-app transition with no full page reload (a full
+reload would tear down the Graph view's live worker and 3D state).
+
+### Four graph modes
+
+The Graph view renders the same underlying node/edge data through four
+user-switchable modes, selected via a `role="radiogroup"` control:
+
+- **Cloud** — the original force-directed "neural cloud" view (2D fallback
+  unchanged).
+- **Orbital Systems** — a community-shell layout grouping nodes by Leiden
+  community.
+- **Strata** — a Leiden-hierarchy-level layout, stacking all available
+  hierarchy levels simultaneously (a deliberate simplification; there is no
+  separate single-level drill-down selector).
+- **Knowledge Terrain** — a heightfield surface with nodes placed by region
+  and elevation.
+
+All four modes share one single-draw-call `InstancedMesh2` node layer; only
+the physics worker's force configuration and, in 3D, a bounded transition
+blend differ per mode — there are no per-node meshes in any mode. Switching
+modes never resets selection, filters, or expanded-node state, including
+across an "Open in Wiki" round trip or any other tab excursion; each switch
+is announced via an `aria-live="polite"` region. Mode transitions use a
+pure, bounded (~800ms), interruptible blend between two real worker-computed
+position snapshots — never a scripted animation — and resolve instantly
+under `prefers-reduced-motion`. Every mode has a matching 2D fallback and
+accessibility-tree view (nested community groups for Orbital, per-level
+hierarchy groups with a populated links table for Strata, elevation-tier
+region groups for Terrain), all driven by the same shared grouping logic and
+color system as the 3D scene, so the two representations stay in agreement.
+
+Knowledge Terrain ships optional placeholder chrome assets — two
+equirectangular HDRI/skybox images, two neutral topographic matcap
+textures, and two low-poly landmark models — at `web/public/terrain/`
+(manifest at `web/public/terrain/ASSET_MANIFEST.json`, documenting
+generation parameters for reproducibility). Terrain mode is fully
+functional with none of these assets present: they load via a
+non-throwing fallback path and never break the 3D scene if missing, and
+they are explicitly labeled placeholder, not production-ready.
+
+### Enriched graph data
+
+`GET /api/graph?mode=wikilinks|entities|both` (default `wikilinks`, the
+original `[[wikilink]]` page graph, unchanged since before the GraphRAG
+work). `mode=entities` returns the GraphRAG semantic graph (entity nodes,
+typed and weighted relationship edges); `mode=both` returns the union, with
+`kind: "page"|"entity"` on every node. Entity nodes with at least one stored
+Leiden-community row gain `community` (the finest stored level's cluster
+ID), `level`, `centrality` (`degree` and `eigenvector`, both normalized
+0–1), and an optional `parentCommunity` (ancestor cluster IDs at coarser
+levels); entities that were never Leiden-clustered get no extra keys at all,
+so the client falls back to its own approximate grouping. This is a pure
+projection of already-computed server-side hierarchical Leiden output — it
+is not new graph computation.
+
+In `mode=both`, a page node and an entity node merge into a single node only
+when both their normalized titles match exactly **and** real extraction
+provenance connects them (the page's source hash names a document the
+entity was actually extracted from). Title matching alone is not
+sufficient — ambiguous same-titled pairs are intentionally left as separate,
+unmerged nodes.
+
+## Security and privacy
+
+- **CORS** is locked to a small, closed allowlist of local origins (the
+  built/served frontend's default `127.0.0.1:8765`/`localhost:8765` and the
+  Vite dev server's default `127.0.0.1:5173`/`localhost:5173`) — no
+  wildcard.
+- **CSRF** protection checks the `Origin`/`Referer` header on every
+  state-changing `/api/*` POST route (`/api/upload`, `/api/ingest`,
+  `/api/index-graph`, `/api/lint/fix`, `/api/config`).
+- **Uploads** via `POST /api/upload` are capped at 50MB, enforced by
+  streaming byte-count as the request body arrives (not only a post-parse
+  check).
+- **Local-mode/Ollama privacy routing**: setting `local: true` (or
+  `MYTHIC_LLM_PROVIDER=ollama`) enforces loopback-only egress, checked both
+  when settings are saved and when an LLM client is constructed, so a cloud
+  provider can never be reached in local mode.
+- PII redaction (Presidio-based, fail-closed) wraps every outbound cloud LLM
+  call. See `docs/security/` (threat model, control matrix, data
+  classification, SBOM) and `docs/faq-graphrag-extraction-fixes.md` for the
+  full security design and incident history.
+
 ## LLM provider configuration
 
 A working LLM provider is **required** for `ingest --compile` and `query` —
-there is no offline/no-LLM mode anymore; a missing or misconfigured provider
-raises a clear, actionable error instead of silently degrading.
+there is no offline/no-LLM mode; a missing or misconfigured provider raises
+a clear, actionable error instead of silently degrading.
 
 The default provider is **AuthHub**, an OpenAI-compatible multi-provider
 gateway that mythic authenticates to with an `AUTHHUB_API_KEY` (sent as
@@ -94,7 +216,7 @@ Relevant environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MYTHIC_LLM_PROVIDER` | `authhub` | `authhub` or `anthropic`. |
+| `MYTHIC_LLM_PROVIDER` | `authhub` | `authhub`, `anthropic`, or `ollama`. |
 | `AUTHHUB_API_KEY` | — | AuthHub gateway credential (required for the `authhub` provider). |
 | `MYTHIC_AUTHHUB_BASE_URL` (or `AUTHHUB_BASE_URL`) | `http://localhost:3000` | AuthHub gateway base URL. |
 | `MYTHIC_LLM_MODEL` | `deepseek-chat` | Model slug sent to whichever provider is active. |
@@ -108,11 +230,21 @@ export MYTHIC_LLM_PROVIDER=anthropic
 export ANTHROPIC_API_KEY=...
 ```
 
+**A local Ollama provider is also available**, for fully private,
+loopback-only compile/query with no cloud egress (requires the optional
+`local` extra and a running local Ollama server with a pulled model, for
+example `qwen2.5:7b-instruct`):
+
+```bash
+pip install 'mythic-proportion[local]'
+export MYTHIC_LLM_PROVIDER=ollama
+```
+
 BM25/hybrid retrieval (`search`) and the dangling-wikilink graph stubs in
 `lint` require no LLM and keep working exactly as before — it is only
-`compile` (used by `ingest`/`watch`) and `query`'s answer synthesis that now
-require a configured LLM. See `docs/architecture.md` for the full design
-rationale.
+`compile` (used by `ingest`/`watch`/`index-graph`) and `query`'s answer
+synthesis that require a configured LLM provider. See `docs/architecture.md`
+for the full design rationale.
 
 ## Development
 
@@ -121,16 +253,37 @@ python -m pytest -q --cov=mythic_proportion
 python -m ruff check .
 python -m mypy src
 
-# or, all three via the Makefile:
+cd web
+npx vitest run
+npm run build
+
+# or, ruff + mypy + pytest together via the Makefile:
 make check
 ```
 
+Current baselines: 419 pytest tests across 30 files, all passing; 380
+vitest tests across 42 files, all passing; ruff and mypy clean; `tsc
+--noEmit` clean; `npm run build` succeeds (one non-blocking bundle-size
+advisory for a chunk over 500kB, not a build error).
+
+## What's not built yet
+
+The following remain explicit, deferred non-goals, not partially-built
+features: an agent layer (`agents/` is a one-line stub), an MCP server
+(`mcp/` is a one-line stub, no `mythic mcp` CLI verb), a broader ComfyUI
+product asset pipeline beyond the Knowledge Terrain chrome-asset capture
+described above, and retirement of the legacy `/` single-page app. None of
+these have scheduled work in the current plan; they require a separate
+planning pass before implementation begins.
+
 ## Design ethos
 
-Six simple commands (`init / ingest / query / lint / watch / serve`) on the
-surface; a typed, robust pipeline underneath. Parsing/filing/dedup
-(`ingest --no-compile`) and search stay dependency-light — hybrid retrieval
-gets better with local embeddings — but compiling wiki pages and synthesizing
-query answers now require a configured LLM provider (AuthHub/DeepSeek by
-default, or Anthropic/Claude as an alternative): a missing credential is
-reported as a clear, actionable error rather than a silent stub.
+Seven public commands (`init` / `ingest` / `index-graph` / `query` / `lint`
+/ `watch` / `serve`, plus two hidden utility commands not part of the public
+surface) on the surface; a typed, robust pipeline underneath. Parsing/
+filing/dedup (`ingest --no-compile`) and search stay dependency-light —
+hybrid retrieval gets better with local embeddings — but compiling wiki
+pages, synthesizing query answers, and extracting the GraphRAG entity graph
+now require a configured LLM provider (AuthHub/DeepSeek by default,
+Anthropic/Claude, or a local Ollama model): a missing credential is reported
+as a clear, actionable error rather than a silent stub.

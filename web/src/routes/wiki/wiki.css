@@ -46,7 +46,14 @@
   background: transparent;
   padding: var(--space-2) var(--space-3);
   cursor: pointer;
-  color: inherit;
+  /* Deep-Field Observatory Phase 1 (plan Section 5.2 "Components and
+     states": "Wiki item/search card ... enabled >=4.5:1"). Was `inherit`
+     (which already resolved to `--color-text-primary` via the ancestor
+     chain, so this is a no-visual-change token-explicitness fix) --
+     `--wiki-item-fg` is the same enabled-state token
+     `--wiki-item-fg-disabled` is paired against for a future disabled
+     affordance (components.css). */
+  color: var(--wiki-item-fg);
 }
 
 .mp-wiki-page-item:hover {

@@ -60,4 +60,72 @@
   --shell-tab-fg: var(--color-text-secondary);
   --shell-tab-fg-active: var(--color-text-primary);
   --shell-tab-underline: var(--color-accent);
+
+  /*
+   * Deep-Field Observatory Phase 1 (plan Section 3.1 item 1 / Section 5.2
+   * "Tokens" -- Component tier; Section 6 Phase 1: "Land the F5 fixes").
+   */
+
+  /* Search-result highlight mark (F5 fix 2, plan Section 5.2): was
+     `--color-accent-muted` under `--color-text-on-accent`, which failed
+     4.5:1 in light theme. Routes through the new highlight-surface pair
+     above instead, audited in contrast.test.ts. */
+  --search-mark-bg: var(--color-highlight-surface);
+  --search-mark-fg: var(--color-text-on-highlight);
+
+  /*
+   * Wiki page item / search result card enabled+true-disabled treatment
+   * (plan Section 5.2 "Components and states": "Wiki item/search card
+   * (idle/hover/selected non-color; enabled >=4.5:1; true-disabled marked)"
+   * / "disabled is never conveyed by dimming alone"). No current
+   * WikiView/SearchView journey in this plan marks a page or result
+   * disabled (no such data field exists yet), so these tokens are declared
+   * per the additive-token-family requirement, ready for a future disabled
+   * affordance to consume without inventing new markup/behavior here.
+   * `--wiki-item-disabled-marker` is intentionally a non-color glyph (never
+   * opacity/dimming alone) -- a multiplication-sign badge, paired with
+   * `aria-disabled` and removed pointer events wherever it is eventually
+   * consumed.
+   */
+  --wiki-item-fg: var(--color-text-primary);
+  --wiki-item-fg-disabled: var(--color-text-disabled);
+  --search-card-fg-disabled: var(--color-text-disabled);
+  --wiki-item-disabled-marker: "\2715";
+
+  /* Effects/quality control (plan Section 3.1 item 4 / Section 5.2; the
+     Auto/Full/Balanced/Minimal segmented control wired in Phase 4) -- same
+     segmented-control convention as `.mp-graph-filter`/
+     `.mp-graph-filter--active` in graph.css. */
+  --effects-control-fg: var(--color-text-secondary);
+  --effects-control-fg-active: var(--color-text-on-accent);
+  --effects-control-bg-active: var(--color-accent);
+  --effects-control-border: var(--color-border);
+  --effects-control-border-active: var(--color-accent);
+
+  /* Connections numeric-weight readout (plan Section 3.1 item 3 / Section
+     5.2; the reading-pane Connections list + a11y Weight column wired in
+     Phase 3). Mono per Section 5.2's typography: "--font-family-mono ...
+     for the new Connections weight column". */
+  --connections-weight-font: var(--font-family-mono);
+  --connections-weight-fg: var(--color-text-primary);
+  --connections-row-border: var(--color-border);
+
+  /*
+   * In-scene community-title label chip (plan Section 5.2 "Typography" /
+   * "Tokens": "--graph-label-chip-bg (color-mix in OKLCH, graph-bg 82%)" --
+   * the two-tier label system wired in Phase 2). Kept in this Component
+   * tier per the plan's own token classification even though it carries the
+   * `--graph-` prefix (for discoverability alongside the rest of the
+   * in-scene token family) -- CSS custom-property resolution happens at
+   * used-value time, not `@import` order, so referencing graph.css's
+   * `--graph-bg` here is safe. `--graph-label-chip-fg` uses
+   * `--color-text-primary` (not `--color-text-on-accent`, which is tuned
+   * for an opaque `--color-accent` backdrop, not the near-black/near-white
+   * `--graph-bg` this chip is tinted from) so it clears >=4.5:1 against the
+   * chip in both themes -- audited in contrast.test.ts.
+   */
+  --graph-label-chip-bg: color-mix(in oklch, var(--graph-bg) 82%, transparent);
+  --graph-label-chip-fg: var(--color-text-primary);
+  --graph-label-chip-radius: var(--radius-sm);
+  --graph-label-chip-pad: var(--space-1);
 }

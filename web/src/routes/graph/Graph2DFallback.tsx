@@ -8,7 +8,6 @@
 // the a11y tree.
 import { useEffect, useRef } from "react";
 import type { GraphColors } from "../../lib/graph-colors";
-import { COMMUNITY_COUNT } from "./graphMath";
 import type { VizEdge, VizNode } from "./types";
 
 interface SimNode {
@@ -109,7 +108,13 @@ export function Graph2DFallback({
       const colors = stateRef.current.colors;
       if (!colors) return "#888888";
       if (node.kind === "entity") {
-        return colors.community[node.community % COMMUNITY_COUNT]?.color.getStyle() ?? "#888888";
+        // Phase 4c (plan Section 6.5 item 5): modulo the GENERATED array's
+        // own length, not a hardcoded 8 -- `colors.community` is now sized
+        // to the dataset's actual distinct community count (see
+        // `readGraphColors`), so this keeps working correctly at 16, 32, or
+        // whatever count a real vault's Leiden clustering produces, instead
+        // of silently wrapping every community back into 8 buckets.
+        return colors.community[node.community % colors.community.length]?.color.getStyle() ?? "#888888";
       }
       const key = node.type as keyof GraphColors["node"];
       return colors.node[key]?.color.getStyle() ?? "#888888";
@@ -192,6 +197,8 @@ export function Graph2DFallback({
       ctx!.font = "11px sans-serif";
       ctx!.textAlign = "center";
       const textStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-text-primary");
+
+      // Draw every visible node's circle unconditionally (unchanged).
       for (const node of nodesRef.current) {
         if (!visibleIds.has(node.id)) continue;
         const isFocused = node.id === selectedId || node.id === hoveredId;
@@ -200,10 +207,45 @@ export function Graph2DFallback({
         ctx!.fillStyle = nodeColor(node);
         ctx!.arc(node.x, node.y, 5 + node.size * 2, 0, Math.PI * 2);
         ctx!.fill();
-        ctx!.fillStyle = textStyle || "#111111";
-        ctx!.fillText(truncateLabel(node.label), node.x, node.y - 12);
-        ctx!.globalAlpha = 1;
       }
+      ctx!.globalAlpha = 1;
+
+      // Browser-audit item 8 (cosmetic, live-Chrome finding): draw labels in
+      // a SEPARATE, priority-ordered pass with simple AABB collision
+      // avoidance -- close nodes' labels (e.g. "TEXAS" and "ACME ROBOTICS")
+      // previously always drew unconditionally at every visible node's
+      // position with no overlap check at all. Priority: the
+      // selected/hovered node's label always wins (never suppressed), then
+      // larger/higher-degree nodes take priority over smaller ones, so the
+      // same node's label is suppressed consistently frame-to-frame rather
+      // than flickering. A skipped label's node circle above is still drawn
+      // (only the text is suppressed), and its full label remains available
+      // via hover/selection and the accessibility tree.
+      ctx!.fillStyle = textStyle || "#111111";
+      const placedLabelBoxes: { x1: number; y1: number; x2: number; y2: number }[] = [];
+      const labelCandidates = nodesRef.current
+        .filter((node) => visibleIds.has(node.id))
+        .sort((a, b) => {
+          const aFocused = a.id === selectedId || a.id === hoveredId;
+          const bFocused = b.id === selectedId || b.id === hoveredId;
+          if (aFocused !== bFocused) return aFocused ? -1 : 1;
+          return b.size - a.size;
+        });
+      for (const node of labelCandidates) {
+        const isFocused = node.id === selectedId || node.id === hoveredId;
+        const label = truncateLabel(node.label);
+        const halfWidth = ctx!.measureText(label).width / 2;
+        const labelY = node.y - 12;
+        const box = { x1: node.x - halfWidth, x2: node.x + halfWidth, y1: labelY - 9, y2: labelY + 3 };
+        const overlapsPlaced = placedLabelBoxes.some(
+          (p) => box.x1 < p.x2 && box.x2 > p.x1 && box.y1 < p.y2 && box.y2 > p.y1,
+        );
+        if (overlapsPlaced && !isFocused) continue;
+        placedLabelBoxes.push(box);
+        ctx!.globalAlpha = selectedId || hoveredId ? (isFocused ? 1 : 0.25) : 1;
+        ctx!.fillText(label, node.x, labelY);
+      }
+      ctx!.globalAlpha = 1;
     }
 
     function nodeAt(x: number, y: number): SimNode | null {

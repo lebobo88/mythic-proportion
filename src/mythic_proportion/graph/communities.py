@@ -24,6 +24,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from mythic_proportion.graph.centrality import compute_eigenvector_centrality
 from mythic_proportion.graph.store import GraphStore
 
 #: Pinned across every real (non-test) call site -- this is what makes
@@ -220,3 +221,85 @@ def compute_communities(
         entities_isolated=len(isolated_ids),
         backend=backend,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b: per-node `/api/graph` enrichment projection (plan Section 6.4/7)
+# ---------------------------------------------------------------------------
+
+
+def project_node_enrichment(conn: sqlite3.Connection, entity_ids: list[int]) -> dict[int, dict]:
+    """``{entity_id: {"community": int, "level": int, "centrality": {...},
+    "parentCommunity": {...}}}`` -- a pure PROJECTION of the already-computed
+    hierarchical Leiden output (``communities`` table) plus a freshly
+    computed (never persisted) eigenvector centrality score, for exactly the
+    entities in ``entity_ids`` that already have at least one ``communities``
+    row. This never runs Leiden itself (see :func:`compute_communities`,
+    this function's only producer of that table) -- it is read-only against
+    already-stored data, matching the plan's "projection, not new graph
+    computation" invariant (Section 3.2/6.4).
+
+    An entity id with NO stored ``communities`` row at all (never
+    Leiden-clustered, e.g. added since the last `mythic index-graph`) is
+    OMITTED entirely from the return value -- never fabricated -- so
+    `/api/graph`'s caller (and the client's `deriveVizGraph` fallback check)
+    can tell "genuinely not yet computed" apart from "computed as an
+    all-zero score".
+
+    Field semantics (labeled judgment calls -- plan Section 5.3 leaves both
+    open at plan-approval time; see the ENGINEERING_JOB report for the full
+    rationale):
+
+    * ``level``/``community`` report the entity's FINEST (highest-numbered)
+      stored level -- the most specific grouping available -- not the
+      coarsest. ``level`` 0 is still the hierarchy's own coarsest tier (per
+      the plan's own convention); this entity may simply not participate
+      that far down if its finest recorded level IS 0.
+    * ``parentCommunity`` is the entity's full ANCESTOR chain: for every
+      OTHER level it has a stored cluster at (i.e. every level coarser than
+      its own finest one), ``parentCommunity[level] = cluster_at_that_level``
+      -- this is what lets the client's Strata mode build a complete
+      hierarchy tree (plan Section 6.5: "a Leiden-hierarchy tree with level
+      and ancestor information") without a second round trip. Omitted
+      entirely when the entity has only one stored level (nothing to chain).
+    """
+    if not entity_ids:
+        return {}
+
+    store = GraphStore(conn)
+    rows = store.communities_full_for_entities(entity_ids)
+    if not rows:
+        return {}
+
+    # entity_id -> {level: cluster}
+    levels_by_entity: dict[int, dict[int, int]] = {}
+    for level, cluster, _parent_cluster, entity_id in rows:
+        levels_by_entity.setdefault(entity_id, {})[level] = cluster
+
+    entities = store.get_entities_by_ids(list(levels_by_entity.keys()))
+    degree_by_entity = {int(e["id"]): int(e["degree"]) for e in entities}
+    max_degree = max(degree_by_entity.values(), default=0)
+
+    edges = build_weighted_edge_list(conn)
+    eigenvector_scores = compute_eigenvector_centrality(edges, list(levels_by_entity.keys()))
+
+    result: dict[int, dict] = {}
+    for entity_id, levels in levels_by_entity.items():
+        finest_level = max(levels.keys())
+        community = levels[finest_level]
+        degree_raw = degree_by_entity.get(entity_id, 0)
+        degree_normalized = (degree_raw / max_degree) if max_degree > 0 else 0.0
+
+        entry: dict = {
+            "community": community,
+            "level": finest_level,
+            "centrality": {
+                "degree": round(degree_normalized, 6),
+                "eigenvector": round(eigenvector_scores.get(entity_id, 0.0), 6),
+            },
+        }
+        parent_community = {level: cluster for level, cluster in levels.items() if level != finest_level}
+        if parent_community:
+            entry["parentCommunity"] = parent_community
+        result[entity_id] = entry
+    return result

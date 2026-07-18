@@ -10,6 +10,7 @@ import { Color, IcosahedronGeometry, MeshStandardMaterial, PlaneGeometry } from 
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { GraphColors } from "../../../lib/graph-colors";
 import type { VizNode } from "../types";
+import { computeFitDistance, type GraphFitRequest } from "./CameraRig";
 
 export interface InstancedNodesHandle {
   /** Mutate instance positions from the latest worker tick -- called from Graph3DScene's single useFrame. */
@@ -25,23 +26,121 @@ export interface InstancedNodesProps {
   neighborIds: Set<string>;
   onHoverNode: (id: string | null) => void;
   onSelectNode: (id: string) => void;
+  /**
+   * Latest camera-fit request (same object Graph3DScene hands CameraRig on
+   * every worker "end") -- used to rescale the LOD tier thresholds to the
+   * distance the camera actually settles at. See `computeLodDistances`.
+   */
+  fit?: GraphFitRequest | null;
+  /**
+   * T2 remediation (bounded investigation, plan Section 6.5 closeout
+   * finding): `true` while Graph3DScene has an active mode-switch transition
+   * blend in flight. Suppresses the flat-quad LOD2 tier for that window (see
+   * `computeLodDistances`'s `suppressFarTier` doc comment for the full
+   * root-cause rationale) -- optional/defaults to `false` so every other
+   * caller (tests, `ModeSpikeView`) is unaffected.
+   */
+  transitionActive?: boolean;
 }
 
 // LOD tiers (reflexion critique item 1 / ADR-0501 fitness criteria): a real
 // per-instance distance-driven detail reduction, not just "one geometry for
 // everyone." LOD0 (near, ~42-vert icosahedron) is used for close-up /
 // hovered / selected-range nodes; LOD1 drops to a 12-vert icosahedron past
-// `LOD1_DISTANCE`; LOD2 collapses to a single flat quad -- a cheap
-// point-sprite-equivalent -- past `LOD2_DISTANCE`, which is what makes ~50k
-// nodes affordable once the camera is zoomed out. InstancedMesh2 buckets
+// the lod1 threshold; LOD2 collapses to a single flat quad -- a cheap
+// point-sprite-equivalent -- past the lod2 threshold, which is what makes
+// ~50k nodes affordable once the camera is zoomed out. InstancedMesh2 buckets
 // each *instance* into whichever tier its own camera distance falls into
 // every frame (not a single mesh-wide LOD), so this scales with visible
 // density, not total node count.
 const GEOMETRY_NEAR = new IcosahedronGeometry(1, 1); // ~42 verts
 const GEOMETRY_MID = new IcosahedronGeometry(1, 0); // 12 verts
 const GEOMETRY_FAR = new PlaneGeometry(1.4, 1.4); // 4 verts, point-sprite-equivalent
-const LOD1_DISTANCE = 90;
-const LOD2_DISTANCE = 260;
+
+// Pre-fit defaults AND permanent floors for the scaled thresholds below --
+// tuned for the initial [0,0,60] camera, and exactly the values that were
+// previously hardcoded as the ONLY thresholds.
+export const DEFAULT_LOD1_DISTANCE = 90;
+export const DEFAULT_LOD2_DISTANCE = 260;
+
+export interface LodDistances {
+  lod1: number;
+  lod2: number;
+}
+
+/**
+ * T2 remediation (bounded investigation, plan Section 6.5 closeout finding):
+ * a sentinel `lod2` value used to fully suppress the flat-quad tier during an
+ * active mode-transition blend -- see `computeLodDistances`'s `suppressFarTier`
+ * param and `instancedNodesLod.test.ts`'s "LOD2 (flat-quad) tier can be
+ * suppressed" describe block for the full root-cause evidence and rationale.
+ * Chosen far beyond any plausible real-world graph radius (settled Cloud
+ * radius is documented at ~596 at the 1500-node disclosure cap; this is
+ * several orders of magnitude past that) so no node can select LOD2 while
+ * suppressed, without using `Infinity` (kept a finite, directly-assertable
+ * value for test/debug clarity).
+ */
+export const LOD_FAR_TIER_SUPPRESSED_DISTANCE = 1_000_000;
+
+/**
+ * T2 remediation (3D graph "collapse at ~8s" -- LOD-threshold root cause;
+ * see instancedNodesLod.test.ts for the full live-capture evidence): the
+ * LOD tier thresholds used to be FIXED absolute distances (90/260), while
+ * camera-fit legitimately parks the camera at `computeFitDistance(radius,
+ * fov)` -- ~2.2x the fit radius at the default fov of 75 -- so any real
+ * graph with a settled radius past ~120 world units put EVERY node beyond
+ * the flat-quad threshold the moment the fit completed: healthy, spread-out
+ * 3D positions rendered as tiny unshaded flat quads that read as a
+ * "collapsed dense clump" (the same symptom class as the original audit's
+ * flattest-LOD-tier bug, which was fixed on the graph-radius side only).
+ *
+ * This scales the thresholds off the ACTUAL fit geometry instead:
+ *  - `lod1` = the near edge of the visible node band (`fitDistance -
+ *    fitRadius`): anything the user dollies closer than the settled graph's
+ *    near edge gets the full 42-vert geometry.
+ *  - `lod2` = 1.5x the FAR edge of the band (`fitDistance + fitRadius`):
+ *    strictly beyond every visible node at the settled view, so the
+ *    flat-quad tier only engages on a genuine manual zoom-out well past the
+ *    fitted framing -- its actual purpose.
+ * At the settled fit view the whole graph therefore renders as solid,
+ * shaded geometry (mostly the 12-vert mid tier), never the flat tier. The
+ * original constants remain as floors so small/close-up graphs (fit
+ * distance in the old regime) behave exactly as before. `lod2 > lod1` holds
+ * for every input (`lod2 >= 1.5*(D+R) > D >= lod1`), which
+ * `updateAllLOD`'s strictly-increasing validation requires.
+ *
+ * `suppressFarTier` (T2 remediation, plan Section 6.5 closeout finding: a
+ * transient "jagged black/teal" artifact observed in roughly 1/5 Orbital ->
+ * Cloud mode-switch attempts): while `true`, pins `lod2` to
+ * `LOD_FAR_TIER_SUPPRESSED_DISTANCE`, defeating the flat-quad tier entirely.
+ * The regression test above proves NO real node ever selects LOD2 at a
+ * settled/fit view -- it exists only for a genuine manual zoom-out well past
+ * the fitted framing. During an in-flight mode-transition blend, `fit`
+ * (hence these thresholds) is still the PREVIOUS mode's stale, already-
+ * settled geometry, while positions are actively blending toward the new
+ * mode's live (and, for some mode pairs -- e.g. Orbital's shell radius
+ * versus Cloud's much larger settled radius -- substantially larger) target.
+ * That stale-threshold/live-geometry mismatch is exactly the one window
+ * where a real, currently-visible node CAN transiently cross into LOD2's
+ * flat, non-billboarded `PlaneGeometry` (`GEOMETRY_FAR`), which -- unlike
+ * LOD0/1's real icosahedra -- never rotates to face the camera
+ * (`applyPositions` only ever mutates `.position`) and so can render
+ * near-black at a grazing view/light angle under the scene's single
+ * `directionalLight`. Suppressing LOD2 for the ~800ms blend window closes
+ * that one window without changing steady-state (non-transitioning)
+ * behavior at all: `lod1` (the real-geometry near/mid split) is untouched.
+ */
+export function computeLodDistances(
+  fitDistance: number,
+  fitRadius: number,
+  suppressFarTier = false,
+): LodDistances {
+  const lod1 = Math.max(DEFAULT_LOD1_DISTANCE, fitDistance - fitRadius);
+  const lod2 = suppressFarTier
+    ? LOD_FAR_TIER_SUPPRESSED_DISTANCE
+    : Math.max(DEFAULT_LOD2_DISTANCE, (fitDistance + fitRadius) * 1.5);
+  return { lod1, lod2 };
+}
 
 function colorForNode(node: VizNode, colors: GraphColors): Color {
   if (node.kind === "entity") {
@@ -52,10 +151,22 @@ function colorForNode(node: VizNode, colors: GraphColors): Color {
 }
 
 export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesProps>(function InstancedNodes(
-  { nodes, visibleIds, colors, selectedId, hoveredId, neighborIds, onHoverNode, onSelectNode },
+  {
+    nodes,
+    visibleIds,
+    colors,
+    selectedId,
+    hoveredId,
+    neighborIds,
+    onHoverNode,
+    onSelectNode,
+    fit = null,
+    transitionActive = false,
+  },
   ref,
 ) {
   const gl = useThree((state) => state.gl);
+  const camera = useThree((state) => state.camera);
   const idToIndex = useRef(new Map<string, number>());
   const lastMoveAt = useRef(0);
 
@@ -76,8 +187,10 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
     const capacity = Math.max(1, nodes.length);
     const m = new InstancedMesh2(GEOMETRY_NEAR, material, { capacity, createEntities: true, renderer: gl });
     // Real distance-driven LOD tiers -- see the GEOMETRY_* comment above.
-    m.addLOD(GEOMETRY_MID, material, LOD1_DISTANCE);
-    m.addLOD(GEOMETRY_FAR, material, LOD2_DISTANCE);
+    // Registered with the pre-fit default thresholds; rescaled to the actual
+    // camera-fit geometry by the `updateAllLOD` effect below on every fit.
+    m.addLOD(GEOMETRY_MID, material, DEFAULT_LOD1_DISTANCE);
+    m.addLOD(GEOMETRY_FAR, material, DEFAULT_LOD2_DISTANCE);
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material, gl]);
@@ -85,6 +198,21 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
   useEffect(() => {
     return () => mesh.dispose();
   }, [mesh]);
+
+  // Rescale the LOD tier thresholds to the distance the camera actually
+  // settles at, on every fit (initial load, data reload, mode switch --
+  // `fit.nonce` bumps each time, changing the object's identity). Discrete,
+  // low-frequency, never part of the per-frame path. The fov read and
+  // `computeFitDistance` call mirror CameraRig's fit handler exactly, so
+  // these thresholds always describe the same view the camera ends up in.
+  useEffect(() => {
+    if (!fit) return;
+    const perspective = camera as unknown as { fov?: number; isPerspectiveCamera?: boolean };
+    const fovDeg = perspective.isPerspectiveCamera && perspective.fov ? perspective.fov : 50;
+    const distance = computeFitDistance(fit.radius, fovDeg);
+    const { lod1, lod2 } = computeLodDistances(distance, fit.radius, transitionActive);
+    mesh.updateAllLOD([lod1, lod2]);
+  }, [mesh, camera, fit, transitionActive]);
 
   // Rebuild instances whenever the node set itself changes (data reload / filter
   // membership) -- NOT on every tick, and NOT via setState.

@@ -2,11 +2,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 720px;
 }
 
 .mp-search-input {
   width: 100%;
+  max-width: 720px;
+}
+
+/* Phase 4d (plan Section 6.6 item 1): results list + first-class detail pane,
+   the same list-plus-reading-pane instrument as Wiki/Graph. */
+.mp-search-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: var(--space-5);
+  align-items: start;
 }
 
 .mp-search-results {
@@ -39,6 +48,15 @@
   border-color: var(--color-accent);
 }
 
+/* Non-color selection cue (border + background), same convention as
+   WikiView's `--selected` page-list item -- the dim treatment on siblings
+   (`.mp-context-dimmed`, applied inline in SearchView.tsx) is always paired
+   with this, never color/opacity alone. */
+.mp-search-result-card--selected {
+  background-color: var(--color-bg-inset);
+  border-color: var(--color-accent);
+}
+
 .mp-search-result-title {
   font-weight: 600;
 }
@@ -54,8 +72,12 @@
 }
 
 .mp-search-result-snippet mark {
-  background-color: var(--color-accent-muted, var(--color-accent));
-  color: var(--color-text-on-accent);
+  /* F5 fix 2 (plan Section 3.3/5.2, Deep-Field Observatory Phase 1): was
+     `--color-accent-muted` under `--color-text-on-accent`, which failed
+     4.5:1 in light theme. Routed through the dedicated highlight-surface
+     token pair instead -- audited in contrast.test.ts. */
+  background-color: var(--search-mark-bg);
+  color: var(--search-mark-fg);
   border-radius: var(--radius-sm);
   padding: 0 2px;
 }

@@ -509,6 +509,37 @@ class GraphStore:
         ).fetchall()
         return [(int(row["cluster"]), int(row["entity_id"])) for row in rows]
 
+    def communities_full_for_entities(
+        self, entity_ids: list[int]
+    ) -> list[tuple[int, int, int | None, int]]:
+        """``[(level, cluster, parent_cluster, entity_id)]`` for every stored
+        community row touching any of ``entity_ids``, across EVERY level --
+        unlike :meth:`communities_for_entities` (single-level lookup), this
+        is what the `/api/graph` per-node Leiden projection (Phase 4b, plan
+        Section 6.4/7) needs to report each entity's finest-level community
+        plus its coarser ancestor chain (``parentCommunity``, keyed by
+        level). An entity id absent from the ``communities`` table entirely
+        (never Leiden-clustered, e.g. added since the last `mythic
+        index-graph`) simply has no rows here -- callers must not fabricate
+        one."""
+        if not entity_ids:
+            return []
+        placeholders = ",".join("?" for _ in entity_ids)
+        rows = self._conn.execute(
+            f"SELECT level, cluster, parent_cluster, entity_id FROM communities "
+            f"WHERE entity_id IN ({placeholders}) ORDER BY entity_id, level",
+            entity_ids,
+        ).fetchall()
+        return [
+            (
+                int(row["level"]),
+                int(row["cluster"]),
+                int(row["parent_cluster"]) if row["parent_cluster"] is not None else None,
+                int(row["entity_id"]),
+            )
+            for row in rows
+        ]
+
     def get_entities_by_ids(self, entity_ids: list[int]) -> list[dict]:
         if not entity_ids:
             return []
@@ -602,6 +633,29 @@ class GraphStore:
 
     # -- reads used by GET /api/graph?mode=entities|both ----------------------------
 
+    def entity_source_page_paths(self) -> dict[int, set[str]]:
+        """``{entity_id: {text-unit page_path, ...}}`` -- each entity's
+        extraction provenance: the set of source documents (as recorded in
+        ``text_units.page_path``, e.g. ``raw/<content-hash>.md`` for a real
+        ``reindex_graph`` run over ingested sources) whose text units the
+        entity was actually extracted from, via the ``text_unit_entities``
+        ref-count table that is already this store's single source of truth
+        for entity liveness (see :meth:`delete_orphan_entities`).
+
+        Added for ``GET /api/graph?mode=both``'s page/entity identity dedup
+        (Codex CODE_REVIEW finding J-001): a page/entity title match alone is
+        not identity -- the merge additionally requires the page's own
+        ``source_hash`` to name a document in this provenance set. Distinct
+        pairs only; an entity with no remaining text-unit links (transiently
+        possible mid-reindex, before orphan cleanup) is simply absent."""
+        result: dict[int, set[str]] = {}
+        for row in self._conn.execute(
+            "SELECT DISTINCT tue.entity_id, tu.page_path FROM text_unit_entities tue "
+            "JOIN text_units tu ON tu.id = tue.text_unit_id"
+        ):
+            result.setdefault(int(row["entity_id"]), set()).add(str(row["page_path"]))
+        return result
+
     def read_entity_graph(self) -> tuple[list[dict], list[dict]]:
         """``(nodes, edges)`` for every entity/relationship currently stored.
 
@@ -610,6 +664,22 @@ class GraphStore:
         -- callers combining both (``GET /api/graph?mode=both``) can tell
         them apart; callers of the legacy shape (the default,
         ``mode=wikilinks``) never see this at all.
+
+        T2 remediation (3D graph intermittent-collapse investigation, round
+        3): both queries carry an explicit ``ORDER BY`` now. SQLite's own
+        documentation is explicit that row order is undefined without one;
+        this mattered here because the client's `d3-force-3d` worker seeds
+        each node's INITIAL position purely from its ARRAY INDEX (a
+        deterministic golden-angle spiral) -- so an otherwise-identical graph
+        returned in a different row order starts physics from a genuinely
+        different configuration, and a mostly-disconnected, weakly-contained
+        graph can settle into a different (including visually collapsed)
+        equilibrium depending on that starting order. This closes that
+        undefined-order gap; see `tests/test_graph.py`'s
+        `test_read_entity_graph_returns_nodes_and_edges_in_stable_ascending_id_order`
+        for the regression coverage (RED without the `ORDER BY`, GREEN with
+        it, using a delete/reinsert history so a fresh-insert-order
+        coincidence can't mask the missing guarantee).
         """
         nodes = [
             {
@@ -619,7 +689,7 @@ class GraphStore:
                 "kind": "entity",
                 "degree": row["degree"],
             }
-            for row in self._conn.execute("SELECT id, title, type, degree FROM entities")
+            for row in self._conn.execute("SELECT id, title, type, degree FROM entities ORDER BY id")
         ]
         edges = [
             {
@@ -628,6 +698,9 @@ class GraphStore:
                 "type": row["type"],
                 "weight": row["weight"],
             }
-            for row in self._conn.execute("SELECT source_id, target_id, type, weight FROM relationships")
+            for row in self._conn.execute(
+                "SELECT source_id, target_id, type, weight FROM relationships "
+                "ORDER BY source_id, target_id, type"
+            )
         ]
         return nodes, edges

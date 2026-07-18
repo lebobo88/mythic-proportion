@@ -1,0 +1,74 @@
+/*
+ * Shared "first-class reading/detail pane" (plan Section 6.6 item 1). Mirrors
+ * the token usage already established by WikiView's own reading pane and
+ * GraphView's `mp-graph-reading-pane` aside -- extends the same visual
+ * pattern into Search/Ask rather than inventing a new one.
+ */
+
+.mp-detail-pane {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.mp-detail-pane-empty-state {
+  color: var(--color-text-secondary);
+  padding: var(--space-5);
+}
+
+.mp-detail-pane-error {
+  color: var(--color-danger);
+}
+
+.mp-detail-pane-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mp-detail-pane-header h3 {
+  margin: 0;
+}
+
+.mp-detail-pane-badge {
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+}
+
+.mp-detail-pane-path {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--space-1);
+}
+
+.mp-detail-pane-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+}
+
+.mp-detail-pane-tag {
+  font-size: var(--font-size-xs);
+  background-color: var(--color-bg-elevated);
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
+}
+
+.mp-detail-pane-open {
+  margin: var(--space-2) 0;
+}
+
+.mp-detail-pane-body {
+  line-height: 1.6;
+}
+
+/* `.mp-context-dimmed` (the generalized focus-plus-context-dim utility used
+   by this pane's list-side callers) lives in styles/base.css, not here, so
+   it stays available regardless of which view mounts first -- see that
+   file's doc comment. */

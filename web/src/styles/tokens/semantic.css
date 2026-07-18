@@ -8,6 +8,33 @@
  * WCAG 4.5:1 (body text) / 3:1 (large text + UI) in BOTH themes.
  */
 
+/*
+ * Focus-plus-context-dim (plan Section 5.1/7): the app-wide generalization
+ * of Phase 4c's per-mode graph focus/dim motif (InstancedNodes.tsx's
+ * non-neighbor node opacity) into 2D chrome (Section 6.6 item 4). A single
+ * theme-independent opacity multiplier -- approved as final at ~0.28
+ * (Section 7/10.7) -- applied via the `.mp-context-dimmed` utility
+ * (components/detail-pane/page-detail-pane.css) to a non-selected sibling
+ * once something IS selected. Additive; does not touch or replace the
+ * graph's own existing dim value.
+ */
+:root {
+  --focus-context-dim: 0.28;
+
+  /*
+   * Deep-Field Observatory Phase 1 (plan Section 5.2 "Color and contrast" /
+   * "Tokens" -- Semantic: ADDED "--color-highlight-surface"/
+   * "--color-text-on-highlight", both themes). Declared once in this
+   * theme-independent block -- same precedent as `--focus-context-dim`
+   * above -- because the plan pins both to fixed primitives
+   * (`--warning-600`/`--neutral-0`) rather than per-theme values. Backs the
+   * F5 search-mark fix (search.css's `--search-mark-*` component tokens);
+   * see contrast.test.ts for the audited pairing.
+   */
+  --color-highlight-surface: var(--warning-600);
+  --color-text-on-highlight: var(--neutral-0);
+}
+
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
@@ -46,7 +73,20 @@
   --color-bg-inset: var(--neutral-700);
 
   --color-text-primary: var(--neutral-1000);
-  --color-text-secondary: var(--neutral-300);
+  /*
+   * F5 fix (plan Section 3.3/5.2, VISUAL_REVIEW finding F5): was
+   * `--neutral-300` (oklch 0.42), which cleared 4.5:1 on `--color-bg`/
+   * `--color-bg-elevated` but FAILED 4.5:1 against `--color-bg-inset`
+   * (`--neutral-700`, 0.85) -- the selected-card surface and several
+   * meta-text classes (`.mp-search-result-meta`, `.mp-wiki-page-item-meta`,
+   * `.mp-wiki-hint`, `.mp-wiki-page-path`, `.mp-detail-pane-path`,
+   * `.mp-community-badge-label`), none of which contrast.test.ts audited
+   * before this phase. `--neutral-200` (0.32) clears >=4.5:1 against
+   * `bg`/`bg-elevated`/`bg-inset` alike while remaining visibly secondary
+   * relative to `--color-text-primary` (`--neutral-1000`, 0.20). See the
+   * extended contrast.test.ts "text-primary/secondary vs bg-inset" case.
+   */
+  --color-text-secondary: var(--neutral-200);
   --color-text-disabled: var(--neutral-500);
   --color-text-on-accent: var(--neutral-900);
 

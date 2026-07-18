@@ -13,7 +13,6 @@ live-reachability note), but the test degrades gracefully wherever it runs.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import httpx

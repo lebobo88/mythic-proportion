@@ -16,6 +16,7 @@ fastapi = pytest.importorskip("fastapi")
 
 from mythic_proportion.compile.models import WikiPage  # noqa: E402
 from mythic_proportion.compile.writer import write_page  # noqa: E402
+from mythic_proportion.graph.communities import compute_communities  # noqa: E402
 from mythic_proportion.graph.extract import FakeExtractionClient  # noqa: E402
 from mythic_proportion.graph.index import reindex_graph  # noqa: E402
 from mythic_proportion.graph.tuples import COMPLETION_DELIM, TUPLE_DELIM  # noqa: E402
@@ -25,6 +26,13 @@ from mythic_proportion.vault.init import init_vault  # noqa: E402
 from mythic_proportion.web.app import create_app  # noqa: E402
 from mythic_proportion.web.pages import collect_pages  # noqa: E402
 from mythic_proportion.web.render import render_snippet_html  # noqa: E402
+
+try:
+    import graspologic  # noqa: F401
+
+    _HAS_GRASPOLOGIC = True
+except ImportError:
+    _HAS_GRASPOLOGIC = False
 
 
 def _seed_vault(tmp_path: Path) -> Path:
@@ -380,6 +388,47 @@ def test_api_graph_mode_entities_returns_extracted_entity_graph(tmp_path: Path) 
     assert any(node["label"] == "HYBRID SEARCH" and node["kind"] == "entity" for node in data["nodes"])
 
 
+@pytest.mark.skipif(not _HAS_GRASPOLOGIC, reason="graspologic (or a leidenalg fallback) is not installed")
+def test_api_graph_mode_entities_includes_community_level_and_centrality_when_computed(
+    tmp_path: Path,
+) -> None:
+    """Phase 4b (plan Section 6.4/7): once `compute_communities` has run,
+    `GET /api/graph?mode=entities` projects `community`/`level`/`centrality`
+    onto each entity node -- additive fields layered on top of the existing
+    id/label/type/kind/degree shape, never replacing it (N9-style backward
+    compatibility, mirroring the already-preserved `/api/query` invariant)."""
+    vault = _seed_vault(tmp_path)
+
+    llm_client = FakeExtractionClient(_seed_entity_fixture_response)
+    with IndexStore(vault, HashEmbedder(dim=16), use_vec=False) as store:
+        store.reindex(vault)
+        reindex_graph(
+            vault,
+            store.conn,
+            extraction_client=llm_client,
+            embedder=store.embedder,
+            vec_active=store.vec_active,
+            model="mock",
+            max_gleanings=0,
+            pages=collect_pages(vault),
+        )
+        compute_communities(store.conn, random_seed=42)
+
+    web_client = _client(vault)
+    response = web_client.get("/api/graph", params={"mode": "entities"})
+    assert response.status_code == 200
+    data = response.json()
+    entity_node = next(n for n in data["nodes"] if n["label"] == "HYBRID SEARCH")
+
+    # Every pre-Phase-4b field is untouched -- additive only.
+    assert {"id", "label", "type", "kind", "degree"} <= set(entity_node.keys())
+    assert isinstance(entity_node["community"], int)
+    assert isinstance(entity_node["level"], int)
+    assert set(entity_node["centrality"].keys()) == {"degree", "eigenvector"}
+    assert 0.0 <= entity_node["centrality"]["degree"] <= 1.0
+    assert 0.0 <= entity_node["centrality"]["eigenvector"] <= 1.0
+
+
 def test_api_graph_mode_entities_is_empty_before_any_extraction_run(tmp_path: Path) -> None:
     """No `mythic index-graph` run yet -- must be an empty (not erroring) entity graph."""
     vault = _seed_vault(tmp_path)
@@ -418,6 +467,301 @@ def test_api_graph_mode_both_unions_pages_and_entities(tmp_path: Path) -> None:
     data = response.json()
     kinds = {node["kind"] for node in data["nodes"]}
     assert kinds == {"page", "entity"}
+
+
+def _seed_graph_entities(
+    vault: Path,
+    entities: list[tuple[str, str]],
+    relationships: list[tuple[str, str, str, float]] | None = None,
+    provenance: list[tuple[str, str]] | None = None,
+) -> dict[str, int]:
+    """Write entities/relationships straight into the GraphRAG tables (no LLM
+    extraction round trip needed) -- ``read_entity_graph`` reads these tables
+    directly, so this is the narrowest deterministic seam for the ``mode=both``
+    identity-dedup tests below. Titles are passed pre-normalized (uppercase),
+    matching ``upsert_entity``'s documented caller contract.
+
+    ``provenance`` is a list of ``(entity title, raw source page_path)``
+    pairs (``text_units.page_path``, e.g. ``raw/<hash>.md``) recording which
+    source document the entity was "extracted from", wired exactly the way
+    ``graph.index.reindex_graph`` records it: a ``text_units`` row plus a
+    ``text_unit_entities`` link (applied to EVERY seeded entity sharing that
+    title, so ambiguous-title fixtures can provenance-link all twins). The
+    ``mode=both`` dedup requires this provenance to connect back to the
+    page's own ``source_hash`` before merging (Codex J-001)."""
+    from mythic_proportion.graph.store import GraphStore
+
+    with IndexStore(vault, embedder=None, sync_embedder=False) as store:
+        graph_store = GraphStore(store.conn)
+        ids: dict[str, int] = {}
+        all_ids: list[tuple[str, int]] = []
+        for title, type_ in entities:
+            entity_id = graph_store.upsert_entity(title, type_, "seeded for mode=both dedup tests")
+            ids[title] = entity_id
+            all_ids.append((title, entity_id))
+        chunk_index = 0
+        for title, raw_page_path in provenance or []:
+            for seeded_title, entity_id in all_ids:
+                if seeded_title != title:
+                    continue
+                text_unit_id = graph_store.upsert_text_unit(
+                    raw_page_path, chunk_index, f"seeded provenance {chunk_index}", 5, f"hash-{chunk_index}"
+                )
+                chunk_index += 1
+                graph_store.link_text_unit_entity(text_unit_id, entity_id)
+        for source, target, rel_type, weight in relationships or []:
+            graph_store.upsert_relationship(ids[source], ids[target], rel_type, "seeded", weight)
+        for entity_id in ids.values():
+            graph_store.recompute_degree(entity_id)
+    return ids
+
+
+def _rewrite_page_with_source_hash(vault: Path, page_type: str, title: str, body: str, source_hash: str) -> None:
+    """Re-write one seeded wiki page in place with a ``source_hash`` in its
+    frontmatter -- the shape the real compile pipeline produces for a page
+    generated from an ingested raw document (see ``WikiPage``'s docstring)."""
+    write_page(
+        vault,
+        WikiPage.new(page_type=page_type, title=title, body=body, source_hash=source_hash),
+    )
+
+
+def test_api_graph_mode_both_merges_wiki_page_backed_entity_into_one_node(tmp_path: Path) -> None:
+    """Root cause of the "Meridian Logistics" framing defect (T3 advisory H1,
+    independently confirmed against the demo vault): ``mode=both`` unioned page
+    nodes and entity nodes with NO identity dedup, so a wiki-page-backed entity
+    appeared as TWO same-labeled nodes -- and when the page twin was isolated
+    (zero wikilink edges), clicking it framed a degenerate one-point set with no
+    edge in sight. A page and an entity whose normalized titles match 1:1 must
+    now merge into ONE node that keeps the page id (load-bearing for the
+    reading pane, Open-in-Wiki, and Cmd+K jump) and absorbs the entity twin's
+    edges. Codex J-001: the title match is necessary but NOT sufficient --
+    the merge additionally requires real extraction provenance (the page's
+    ``source_hash`` names a raw document the entity was extracted from)."""
+    vault = _seed_vault(tmp_path)
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Hybrid Retrieval",
+        "Hybrid retrieval combines sparse and dense search. See [[Wikilink Graph]] for more.",
+        "cafe0001",
+    )
+    ids = _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "CONCEPT"), ("ORPHAN CONCEPT", "CONCEPT")],
+        relationships=[("HYBRID RETRIEVAL", "ORPHAN CONCEPT", "RELATED_TO", 2.0)],
+        provenance=[("HYBRID RETRIEVAL", "raw/cafe0001.md")],
+    )
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    hybrid_nodes = [n for n in data["nodes"] if n["label"].lower() == "hybrid retrieval"]
+    assert len(hybrid_nodes) == 1, f"expected one merged node, got {hybrid_nodes}"
+    merged = hybrid_nodes[0]
+    assert merged["id"] == "wiki/concepts/hybrid-retrieval.md"
+    assert merged["kind"] == "page"
+    assert merged["entityId"] == f"entity:{ids['HYBRID RETRIEVAL']}"
+    # The entity twin's own id must be gone from the node list entirely.
+    node_ids = {n["id"] for n in data["nodes"]}
+    assert f"entity:{ids['HYBRID RETRIEVAL']}" not in node_ids
+    # The entity-only `degree` field must NOT ride onto the merged node: it
+    # counts only relationship edges, so it would understate the merged node's
+    # true degree -- omitting it lets the client recompute from the union
+    # edge list (`deriveVizGraph` prefers a server `degree` when present).
+    assert "degree" not in merged
+
+    # The entity twin's relationship edge survives, remapped onto the page id,
+    # with its typed/weighted shape intact.
+    remapped = [
+        e
+        for e in data["edges"]
+        if e["source"] == "wiki/concepts/hybrid-retrieval.md"
+        and e["target"] == f"entity:{ids['ORPHAN CONCEPT']}"
+    ]
+    assert len(remapped) == 1
+    assert remapped[0]["type"] == "RELATED_TO"
+    assert remapped[0]["weight"] == 2.0
+
+    # An entity with no matching page stays a distinct entity node.
+    assert any(
+        n["id"] == f"entity:{ids['ORPHAN CONCEPT']}" and n["kind"] == "entity" for n in data["nodes"]
+    )
+
+
+def test_api_graph_mode_both_merge_leaves_no_dangling_or_duplicate_edges(tmp_path: Path) -> None:
+    """When BOTH endpoints of a relationship merge into their page twins, the
+    remapped edge must land between the two page ids, collide-away the
+    redundant untyped wikilink duplicate of the same (source, target) pair,
+    and leave no edge pointing at a removed ``entity:`` node id."""
+    vault = _seed_vault(tmp_path)
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Hybrid Retrieval",
+        "Hybrid retrieval combines sparse and dense search. See [[Wikilink Graph]] for more.",
+        "cafe0001",
+    )
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Wikilink Graph",
+        "The knowledge graph is made of [[Hybrid Retrieval]]-indexed wikilinks.",
+        "cafe0002",
+    )
+    _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "CONCEPT"), ("WIKILINK GRAPH", "CONCEPT")],
+        relationships=[("HYBRID RETRIEVAL", "WIKILINK GRAPH", "DESCRIBES", 3.0)],
+        provenance=[
+            ("HYBRID RETRIEVAL", "raw/cafe0001.md"),
+            ("WIKILINK GRAPH", "raw/cafe0002.md"),
+        ],
+    )
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    # Both entities merged -- no entity: node ids remain at all.
+    assert not any(n["id"].startswith("entity:") for n in data["nodes"])
+
+    pairs = [(e["source"], e["target"]) for e in data["edges"]]
+    assert len(pairs) == len(set(pairs)), f"duplicate edge pairs: {pairs}"
+
+    # The surviving hybrid->wikilink edge is the richer typed/weighted one.
+    edge = next(
+        e
+        for e in data["edges"]
+        if e["source"] == "wiki/concepts/hybrid-retrieval.md"
+        and e["target"] == "wiki/concepts/wikilink-graph.md"
+    )
+    assert edge["type"] == "DESCRIBES"
+    assert edge["weight"] == 3.0
+
+    # Every edge endpoint resolves to a node that actually exists.
+    node_ids = {n["id"] for n in data["nodes"]}
+    for source, target in pairs:
+        assert source in node_ids
+        assert target in node_ids
+
+
+def test_api_graph_mode_both_never_merges_an_ambiguous_title_match(tmp_path: Path) -> None:
+    """Two entities sharing one normalized title (different types) cannot be
+    safely merged into the single matching page -- identity is ambiguous, so
+    all three same-labeled nodes stay exactly as before the dedup. Both
+    entities carry VALID provenance back to the page's own source document
+    here, so this test isolates the ambiguity rule specifically -- provenance
+    alone cannot rescue an ambiguous title match."""
+    vault = _seed_vault(tmp_path)
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Hybrid Retrieval",
+        "Hybrid retrieval combines sparse and dense search. See [[Wikilink Graph]] for more.",
+        "cafe0003",
+    )
+    _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "CONCEPT"), ("HYBRID RETRIEVAL", "ORGANIZATION")],
+        provenance=[("HYBRID RETRIEVAL", "raw/cafe0003.md")],
+    )
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    same_label = [n for n in data["nodes"] if n["label"].lower() == "hybrid retrieval"]
+    assert len(same_label) == 3
+    page_node = next(n for n in same_label if n["kind"] == "page")
+    assert "entityId" not in page_node
+
+
+def test_api_graph_mode_both_title_coincidence_alone_never_merges(tmp_path: Path) -> None:
+    """Codex CODE_REVIEW J-001 (major): a title-string match is NOT identity.
+    A hand-authored wiki page (no ``source_hash`` -- it was never compiled
+    from an ingested document) that merely shares a normalized title with an
+    independently-extracted entity must NOT be fused with it: fusing would
+    silently misattribute the entity's relationships/enrichment to an
+    unrelated page with no visible error. Both twins must survive."""
+    vault = _seed_vault(tmp_path)  # seeded pages carry no source_hash at all
+    ids = _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "ORGANIZATION")],
+        provenance=[("HYBRID RETRIEVAL", "raw/1111beef.md")],
+    )
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    same_label = [n for n in data["nodes"] if n["label"].lower() == "hybrid retrieval"]
+    assert len(same_label) == 2, f"expected both twins to survive, got {same_label}"
+    page_node = next(n for n in same_label if n["kind"] == "page")
+    assert "entityId" not in page_node
+    assert any(n["id"] == f"entity:{ids['HYBRID RETRIEVAL']}" for n in data["nodes"])
+
+
+def test_api_graph_mode_both_provenance_mismatch_never_merges(tmp_path: Path) -> None:
+    """Codex CODE_REVIEW J-001 (major), second face: even when the page WAS
+    compiled from an ingested document, a same-titled entity extracted from a
+    DIFFERENT document is not the same thing -- the source_hash/provenance
+    link must actually connect before a merge is allowed."""
+    vault = _seed_vault(tmp_path)
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Hybrid Retrieval",
+        "Hybrid retrieval combines sparse and dense search. See [[Wikilink Graph]] for more.",
+        "cafe0001",
+    )
+    ids = _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "CONCEPT")],
+        provenance=[("HYBRID RETRIEVAL", "raw/2222feed.md")],  # a different document
+    )
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    same_label = [n for n in data["nodes"] if n["label"].lower() == "hybrid retrieval"]
+    assert len(same_label) == 2
+    page_node = next(n for n in same_label if n["kind"] == "page")
+    assert "entityId" not in page_node
+    assert any(n["id"] == f"entity:{ids['HYBRID RETRIEVAL']}" for n in data["nodes"])
+
+
+def test_api_graph_mode_both_merged_node_inherits_the_entity_enrichment_projection(
+    tmp_path: Path,
+) -> None:
+    """The Phase 4b per-node Leiden projection (community/level/centrality)
+    must ride onto the merged page node -- the merge must not strand the real
+    enrichment on a removed entity twin (which would silently demote the node
+    to the client's "approximate" union-find fallback)."""
+    vault = _seed_vault(tmp_path)
+    _rewrite_page_with_source_hash(
+        vault,
+        "concept",
+        "Hybrid Retrieval",
+        "Hybrid retrieval combines sparse and dense search. See [[Wikilink Graph]] for more.",
+        "cafe0004",
+    )
+    ids = _seed_graph_entities(
+        vault,
+        entities=[("HYBRID RETRIEVAL", "CONCEPT")],
+        provenance=[("HYBRID RETRIEVAL", "raw/cafe0004.md")],
+    )
+    with IndexStore(vault, embedder=None, sync_embedder=False) as store:
+        store.conn.execute(
+            "INSERT INTO communities(level, cluster, parent_cluster, entity_id) VALUES (0, 4, NULL, ?)",
+            (ids["HYBRID RETRIEVAL"],),
+        )
+        store.conn.commit()
+
+    client = _client(vault)
+    data = client.get("/api/graph", params={"mode": "both"}).json()
+
+    merged = next(n for n in data["nodes"] if n["id"] == "wiki/concepts/hybrid-retrieval.md")
+    assert merged["community"] == 4
+    assert merged["level"] == 0
+    assert set(merged["centrality"].keys()) == {"degree", "eigenvector"}
 
 
 def test_api_graph_rejects_invalid_mode(tmp_path: Path) -> None:
@@ -748,4 +1092,127 @@ def test_api_jobs_endpoint_returns_404_for_unknown_job(tmp_path: Path) -> None:
     client = _client(vault)
 
     response = client.get("/api/jobs/job-does-not-exist")
+    assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Browser-audit item 2 -- /app SPA-fallback deep-link fix
+# ---------------------------------------------------------------------------
+
+
+def _static_next_index_html() -> bytes:
+    from mythic_proportion.web.app import STATIC_NEXT_DIR
+
+    return (STATIC_NEXT_DIR / "index.html").read_bytes()
+
+
+def test_app_deep_link_serves_the_spa_shell_not_a_raw_404(tmp_path: Path) -> None:
+    """A direct URL / hard refresh on a client-side SPA sub-route
+    (`/app/graph`, `/app/search`, ...) must serve `index.html` -- the
+    standard SPA-fallback pattern -- instead of the raw backend
+    `{"detail": "Not Found"}`."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    index_html = _static_next_index_html()
+    for path in ("/app/graph", "/app/search", "/app/some/deeply/nested/route"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.content == index_html
+        assert "text/html" in response.headers["content-type"]
+
+
+def test_app_root_still_serves_the_spa_shell(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/app")
+    assert response.status_code == 200
+    assert response.content == _static_next_index_html()
+
+
+def test_app_real_build_asset_is_served_as_is(tmp_path: Path) -> None:
+    """A real hashed build asset under `static_next/assets/` must still be
+    served as that exact file, not SPA-fallback to `index.html`."""
+    from mythic_proportion.web.app import STATIC_NEXT_DIR
+
+    asset_files = list((STATIC_NEXT_DIR / "assets").iterdir())
+    assert asset_files, "static_next/assets/ must be non-empty for this test to be meaningful"
+    asset_name = asset_files[0].name
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get(f"/app/assets/{asset_name}")
+    assert response.status_code == 200
+    assert response.content == asset_files[0].read_bytes()
+
+
+def test_app_missing_asset_path_stays_a_genuine_404_not_spa_fallback(tmp_path: Path) -> None:
+    """A missing `assets/*` path is a real error (a stale/broken asset
+    reference), never silently masked as a working SPA route."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/app/assets/does-not-exist-12345.js")
+    assert response.status_code == 404
+
+
+def test_app_missing_root_level_static_file_stays_a_genuine_404_not_spa_fallback(tmp_path: Path) -> None:
+    """Codex J-003 (remediation cycle): a missing static-file-shaped
+    reference OUTSIDE `assets/` -- e.g. `favicon.ico`, a manifest, a
+    root-level stylesheet -- must also stay a real 404, not get silently
+    served `index.html` as if it were a working SPA route."""
+    from mythic_proportion.web.app import STATIC_NEXT_DIR
+
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    for missing_path in ("/app/favicon.ico", "/app/manifest.webmanifest", "/app/some-missing-file.css"):
+        assert not (STATIC_NEXT_DIR / missing_path.removeprefix("/app/")).exists(), missing_path
+        response = client.get(missing_path)
+        assert response.status_code == 404, missing_path
+
+
+def test_app_bare_client_route_with_a_dot_in_a_dotfile_style_segment_still_falls_back(tmp_path: Path) -> None:
+    """A dotfile-STYLED bare route segment (leading dot, no real extension,
+    e.g. `/app/.well-known/something`) is not mistaken for a static-file
+    reference -- it still falls back to the SPA shell like any other bare
+    client-side route."""
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/app/.well-known/something")
+    assert response.status_code == 200
+    assert response.content == _static_next_index_html()
+
+
+def test_app_path_traversal_is_rejected(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/app/..%2F..%2F..%2Fetc%2Fpasswd", follow_redirects=True)
+    assert response.status_code in (404, 400)
+    assert "root:" not in response.text
+
+
+def test_app_absent_static_next_still_404s(tmp_path: Path, monkeypatch) -> None:
+    """When `static_next/` hasn't been built at all, `/app` (and any
+    sub-route) must still 404, exactly as before this fix -- the
+    `is_dir()` guard must still fully no-op the route registration."""
+    from mythic_proportion.web import app as web_app_module
+
+    monkeypatch.setattr(web_app_module, "STATIC_NEXT_DIR", tmp_path / "no-such-static-next-dir")
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/app/graph")
+    assert response.status_code == 404
+
+
+def test_api_404_is_unaffected_by_the_spa_fallback(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/this-route-does-not-exist")
     assert response.status_code == 404

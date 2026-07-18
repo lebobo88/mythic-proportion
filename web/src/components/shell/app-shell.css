@@ -12,5 +12,20 @@
 
 .mp-app-shell-main {
   flex: 1;
+  /* Browser-audit item 5 (major, transient render-glitch finding): a flex
+     item's default `min-width` is `auto` (content-based), not `0` -- with no
+     explicit width and no `min-width: 0`, this container could transiently
+     be sized by its own content's intrinsic minimum rather than by the
+     shell's actual available width on a nav-click/theme-toggle reflow,
+     letting a `flex-wrap`/grid child briefly compute against the wrong
+     available width before self-healing on the next layout pass. This is
+     the standard, safe fix for that whole class of "flex child loses its
+     width constraint for a moment" bug: it never affects correctly-sized
+     content, it only stops content from forcing this container wider than
+     its allocated space. Best-effort mitigation -- flagged for Browser
+     Validator re-verification, since it wasn't feasible to visually
+     reproduce the exact trigger without live browser tooling in this job.
+   */
+  min-width: 0;
   padding: var(--space-5);
 }

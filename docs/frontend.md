@@ -1,6 +1,13 @@
 # Frontend Guide
 
-The Mythic Proportion frontend is a **Vite + React + React Three Fiber** application rebuilt on a three-tier OKLCH design-system foundation. It is served at `/app` by the same FastAPI process that hosts the Python core, with the legacy vanilla-JS SPA at `/` preserved for parity.
+The Mythic Proportion frontend is a **Vite + React + React Three Fiber** application built on a three-tier OKLCH design-system foundation. It is served at `/app` by the same FastAPI process that hosts the Python core, with the legacy vanilla-JS SPA at `/` preserved for parity (retiring it is deferred, unscheduled future work).
+
+This guide reflects the merged state after the security/documentation
+remediation pass and the four-mode graph design expansion. See
+`docs/architecture.md` for how the frontend fits into the backend's
+layered architecture (GraphRAG data layer, privacy layer) and
+`docs/security/` for the CORS/CSRF/upload-cap hardening this frontend talks
+to.
 
 ## Quick start
 
@@ -27,7 +34,7 @@ cd web
 npm run build   # → ../src/mythic_proportion/web/static_next/
 ```
 
-The build output is mounted automatically by FastAPI at `/app` (see `src/mythic_proportion/web/app.py` line 121–126).
+The build output is served automatically by FastAPI at `/app`, guarded by an `is_dir()` check (see `src/mythic_proportion/web/app.py`, the `spa_app` route).
 
 ## Architecture
 
@@ -40,16 +47,18 @@ All views consume the same `/api/*` routes the CLI uses, ensuring **no logic dup
 | **Wiki** | `#/wiki` (default) | `GET /api/pages`, `GET /api/page?path=...` |
 | **Search** | `#/search` | `GET /api/search?q=...&k=...` |
 | **Ask** | `#/ask` | `POST /api/query` |
-| **Graph** | `#/graph` | `GET /api/graph` |
-| **Ingest** | `#/ingest` | `POST /api/ingest`, `POST /api/upload`, `GET /api/ingest/status` |
+| **Graph** | `#/graph` | `GET /api/graph?mode=wikilinks\|entities\|both` |
+| **Ingest** | `#/ingest` | `POST /api/ingest`, `POST /api/upload`, `GET /api/ingest/status`, `POST /api/index-graph` + status |
 | **Lint** | `#/lint` | `GET /api/lint`, `POST /api/lint/fix` |
 | **Settings** | `#/settings` | `GET /api/config`, `POST /api/config`, `GET /api/models` |
 
-Each view is a React component at `web/src/routes/{view-name}/` and is rendered by `App.tsx` based on the active tab.
+Each view is a React component at `web/src/routes/{view-name}/` and is rendered by `App.tsx` based on the active tab. `GraphView` state is owned above the conditionally-rendered component (not lost on unmount), so switching away from and back to the Graph tab — including via the "Open in Wiki" action — never cold-restarts the physics worker or resets selection/filters/expanded-node state.
+
+Wiki, Search, Ask, and Graph share a first-class reading/detail pane (`web/src/components/detail-pane/PageDetailPane.tsx`) with a consistent loading/empty/error/populated state contract across all four views.
 
 ### Design token system
 
-A **three-tier hierarchy** ensures design consistency across the app and bridges to the future 3D scene:
+A **three-tier hierarchy** ensures design consistency across the app and bridges to the 3D scene:
 
 **Tier 1 — Primitives** (`web/src/styles/tokens/primitives.css`)
 - OKLCH color scales (neutral, accent, danger, warning, success)
@@ -71,10 +80,15 @@ A **three-tier hierarchy** ensures design consistency across the app and bridges
 
 **Graph tokens** (`web/src/styles/tokens/graph.css`)
 - `--graph-node-source`, `--graph-node-entity`, `--graph-node-concept`, `--graph-node-session` — node type colors
-- `--graph-edge`, `--graph-edge-active` — edge rendering
-- `--graph-community-{1..8}` — a categorical OKLCH ramp for Leiden community visualization (Phase 3+)
+- `--graph-edge`, `--graph-edge-active` — edge rendering, plus edge-weight width/opacity minimum/maximum tokens
+- A **generative OKLCH community color ramp**, `communityColor(index, count, level)` (`web/src/lib/graph-colors.ts`), computing hue as `20 + index * (360 / count)` so the ramp spreads evenly across however many real Leiden communities exist in the data rather than a fixed palette; hierarchy level maps only to a bounded chroma range, never lightness. One optional light-theme `--graph-community-*` lightness override is applied (dark-theme values unchanged) — this closes a real pre-existing WCAG contrast failure found in the original fixed 8-color ramp under the light theme.
+- `--graph-community-glyph-*`/`pattern-*` tokens — non-color glyph and pattern cues that accompany every community color distinction
+- `terrain.*` tokens — elevation ramp steps, contour-line tokens, sky background, matcap reference, band tokens, for the Knowledge Terrain mode
+- `--focus-context-dim` — the generalized focus-plus-dim-context motif used across the graph and the overall app
 - `--graph-hull-fill`, `--graph-glow` — community hull and accent effects
-- Read at runtime via `getComputedStyle(...).getPropertyValue()` → `THREE.Color` for 2D/3D palette unity
+- Read at runtime via `getComputedStyle(...).getPropertyValue()` → `THREE.Color` for 2D/3D palette unity; `culori` is the single OKLCH-to-`THREE.Color` bridge, with no second color path and no hardcoded hex values in the ramp
+
+All graph tokens are **additive** to the existing three-tier system; no existing token value was replaced except the flagged, approved light-theme community-lightness override above.
 
 All tokens are **CSS custom properties** — the single runtime source of truth. Theme changes via `data-theme` are instant (no reload); the 3D scene re-reads graph tokens on every theme toggle.
 
@@ -82,16 +96,37 @@ All tokens are **CSS custom properties** — the single runtime source of truth.
 
 - **OKLCH everywhere** — perceptually even lightness, critical for graph visualization where node/community colors must remain distinguishable and equal-weight on a dark scene
 - **Dark-first** — the default; light mode is an override for accessibility and daylight use
-- **Contrast audited** — WCAG 4.5:1 (body text) / 3:1 (large text + UI) in both themes (`src/styles/__tests__/contrast.test.ts`)
+- **Contrast audited** — WCAG 4.5:1 (body text) / 3:1 (large text + UI) in both themes (`src/styles/__tests__/contrast.test.ts`), extended to cover the generated community ramp at community counts of 8, 16, and 32, level-to-chroma bounds, and community-as-accent pairings, in both themes
+
+### Four graph modes
+
+The Graph view (`web/src/routes/graph/`) renders one shared node/edge dataset through four switchable modes, selected via a `role="radiogroup"` control (`GraphView.tsx` owns mode state):
+
+- **Cloud** — the original force-directed "neural cloud" view; unchanged 2D fallback.
+- **Orbital Systems** — a community-shell layout grouping nodes by Leiden community.
+- **Strata** — a Leiden-hierarchy-level layout stacking all available levels simultaneously (a deliberate simplification; there is no separate single-level drill-down control).
+- **Knowledge Terrain** — a heightfield surface with region/elevation-based node placement.
+
+All four modes are worker force-configuration variants (`web/src/routes/graph/three/modeForces.ts`) layered over the same single-draw-call `InstancedMesh2` node layer (`three/InstancedNodes.tsx`) — there are no per-node meshes in any mode. `three/modeTransition.ts` implements the bounded (~800ms), interruptible transition between two real worker-computed position snapshots when switching modes; it resolves instantly under `prefers-reduced-motion`. Switching modes never touches selection, filters, or expanded-node state, and an `aria-live="polite"` region announces each change.
+
+Each mode has a matching 2D fallback (`Graph2DModeFallback.tsx`) and accessibility-tree view (`a11y/`): Orbital as nested community-grouped clusters with a color legend, Strata as per-level hierarchy groups nesting community sub-groups plus a populated links table, Terrain as region groups labeled by elevation tier and numeric elevation value. Both the 2D fallback and the accessibility tree consume the same shared grouping logic and color system as the 3D scene.
+
+Knowledge Terrain's optional chrome assets (`TerrainEnvironment.tsx`, `TerrainLandmarks.tsx`, `terrainAssetLoading.ts`, `terrainAssetManifest.ts`) live at `web/public/terrain/`: two equirectangular HDRI/skybox images, two neutral topographic matcap textures, and two landmark GLB models, all explicitly labeled placeholder, loaded via a non-throwing fallback path — Terrain mode is fully functional with zero of these assets present.
+
+### TabNav and keyboard navigation
+
+`TabNav.tsx` uses a conformant nav-plus-links pattern — real `<a>`/link elements, `aria-current="page"` on the active tab, plus a non-color underline/bold cue — while still behaving as an in-app SPA transition with no full page reload (a full reload would tear down the Graph view's live worker and 3D state).
 
 ### Cmd+K command palette
 
-The **top-level navigation spine**. Launched via Cmd+K (Ctrl+K on Windows/Linux) or via a search icon in the header:
+The **top-level navigation spine**. Launched via Cmd+K (Ctrl+K on Windows/Linux) or via a visible search icon in the header:
 
-- **Fuzzy page search** — "jump to node" / "open page"
-- **Tab quick-jump** — "go to Search", "go to Graph", etc.
-- **Quick actions** — "run ingest", "run lint", etc.
-- **Keyboard-driven** — no mouse required; same keyboard-first ethos as Obsidian
+- **Navigate** — jump to any of the seven tabs.
+- **Pages** — fuzzy-search and jump to a Wiki page.
+- **Graph** — focus a specific page's node in the Graph view.
+- **Actions** — "Run Ask", "Open Ingest", and similar quick actions.
+- Typed filtering, arrow-key navigation, Enter to activate, Escape to close with focus restored to the invoking element, and defined empty/no-results states.
+- **Keyboard-driven** — no mouse required; same keyboard-first ethos as Obsidian.
 
 Implemented in `CommandPalette.tsx` using the `cmdk` library (Radix UI combobox-based). The palette is **context-aware** — pages list populated from `usePages()` hook, tabs from `TABS` config.
 
@@ -111,7 +146,7 @@ The hook:
 - Reads/writes `localStorage` (persisted)
 - Sets `data-theme` on `<html>` root
 - Triggers re-read of CSS custom properties (no page reload)
-- Broadcasts theme change to the 3D scene (if Phase 5 is active)
+- Broadcasts theme change to the 3D scene, which re-reads graph colors from `graph-colors.ts` on every `data-theme` flip
 
 Light mode is optimized for daylight reading; dark mode is the default and optimized for the 3D graph's dark background.
 
@@ -226,14 +261,24 @@ const [nodes, setNodes] = useState([]);
 const [edges, setEdges] = useState([]);
 
 async function loadGraph() {
-  const res = await fetch("/api/graph");
+  const res = await fetch("/api/graph?mode=both");
   const { nodes, edges } = await res.json();
-  setNodes(nodes); // { id, label, type }
-  setEdges(edges); // { source, target }
+  setNodes(nodes);
+  // node shape: { id, label, type, kind: "page"|"entity", degree,
+  //   community?, level?, centrality?: { degree, eigenvector },
+  //   parentCommunity? }
+  // community/level/centrality are present only on entity nodes that have
+  // at least one stored Leiden-community row; entities never clustered get
+  // no extra keys, which is what lets deriveVizGraph fall back to its own
+  // approximate client-side grouping.
+  setEdges(edges); // { source, target, type, weight }
 }
 
-// Phase 2: 2D canvas rendering (legacy graph.js)
-// Phase 5: 3D WebGL with r3f-forcegraph layout + InstancedMesh rendering
+// The 3D scene (web/src/routes/graph/three/) renders this via
+// React-Three-Fiber + a single-draw-call InstancedMesh2 node layer, with a
+// worker (forceLayout.worker.ts) owning physics for all four graph modes.
+// The 2D fallback (Graph2DFallback.tsx / Graph2DModeFallback.tsx) and the
+// accessibility tree (a11y/) consume the same derived graph data.
 ```
 
 ## Build and deployment
@@ -265,56 +310,57 @@ The build is optimized for production:
 
 ### Serving
 
-The FastAPI app (`src/mythic_proportion/web/app.py`) serves both frontends:
+The FastAPI app (`src/mythic_proportion/web/app.py`) serves both frontends. `/static` is a plain `StaticFiles` mount for the legacy SPA's assets. `/app` uses a custom SPA-fallback route (`spa_app`), guarded by `STATIC_NEXT_DIR.is_dir()` so the route is registered at all only when a frontend build exists: a real file under `static_next/` (including hashed `assets/*` chunks) is served as-is; a bare client-side route (for example `/app/graph`) falls back to `index.html` so the client router can resolve it; but anything that looks like a missing static-file reference (lives under `assets/`, or has a file extension) stays a genuine 404 instead of being silently masked as a working route. A path-traversal attempt is rejected with 404 before any file access.
 
-```python
-app.mount("/static", StaticFiles(directory="static/"), name="static")  # legacy SPA
-if STATIC_NEXT_DIR.is_dir():
-    app.mount("/app", StaticFiles(directory="static_next/", html=True), name="static_next")
-```
+- `/` and `/static/*` — legacy vanilla-JS SPA, preserved unchanged for parity
+- `/app/` — current React frontend (this guide)
+- `/api/*` — Python API (all routes), CORS-restricted and CSRF-protected on state-changing POSTs — see `docs/architecture.md`
 
-- `/` and `/static/*` — legacy vanilla-JS SPA (unchanged from Phase 0)
-- `/app/` — new React frontend (Phase 2 build output)
-- `/api/*` — Python API (all routes)
-
-If `static_next/` doesn't exist (build hasn't run), `/app` is not mounted and returns 404.
+If `static_next/` doesn't exist (build hasn't run), `/app` returns 404. The build output is not committed to the repository, so run `npm install && npm run build` fresh after any checkout before `/app` will serve.
 
 ## Testing
 
 ```bash
 npm run test
+# or, matching CI:
+npx vitest run
 ```
 
-Vitest runs:
+Current baseline: 380 vitest tests across 42 test files, all passing. Vitest covers:
 - Component tests (`.test.tsx` files in `src/components/` and `src/routes/`)
-- Contrast audits (design token WCAG compliance)
-- Unit tests (lib functions, hooks)
+- Contrast audits (design token WCAG compliance, including the generated community ramp at 8/16/32 community counts)
+- Unit tests (lib functions, hooks, mode-transition and terrain-elevation logic)
 
-Coverage is tracked; aim for >80% on new features.
+`tsc --noEmit` is also clean. Coverage is tracked; aim for >80% on new features.
 
-## Future phases
+## What's not built yet
 
-- **Phase 3** — GraphRAG entity/relationship layer: graph API adds semantic nodes/edges alongside wikilinks
-- **Phase 4** — Communities + retrieval modes: hierarchical Leiden clustering, global/local/DRIFT query modes
-- **Phase 5** — 3D graph frontend: r3f-forcegraph layout + InstancedMesh rendering at 50k node target, worker-frozen layout, GPU picking, hover/focus interactions, community hulls
-- **Phase 6** — Privacy layer: PII redaction before cloud calls, local embeddings default (bge-small), optional Ollama local-LLM provider
-
-Each phase adds features without breaking parity with the Python core or the seven views' API contracts.
+The frontend has no remaining scheduled work from the current plan. The
+deferred, unscheduled items are backend/product scope, not frontend gaps:
+an agent layer, an MCP server, a broader ComfyUI product asset pipeline
+beyond the Knowledge Terrain chrome-asset capture, and retirement of the
+legacy `/` single-page app. None of these are partially built; each needs
+its own planning pass before implementation begins.
 
 ## Key files
 
 | Path | Purpose |
 |------|---------|
 | `web/vite.config.ts` | Build config (base `/app`, outDir `static_next`) |
-| `web/package.json` | Dependencies (React, R3F, Radix UI, cmdk, culori) |
+| `web/package.json` | Dependencies (React, R3F, `@three.ez/instanced-mesh`, `d3-force-3d`, Radix UI, cmdk, culori) |
 | `web/src/App.tsx` | Root component, hash router, active tab state |
 | `web/src/routes/*/` | Seven view components |
-| `web/src/components/shell/` | Header, TabNav, AppShell layout |
-| `web/src/components/command-palette/` | Cmd+K palette |
+| `web/src/routes/graph/three/` | 3D scene, instanced node/edge layers, force-layout worker client, mode forces, mode transition blend, terrain surface/environment/landmarks |
+| `web/src/routes/graph/a11y/` | Per-mode accessibility-tree views |
+| `web/src/components/detail-pane/` | Shared reading/detail pane (Wiki, Search, Ask, Graph) |
+| `web/src/components/shell/` | Header, TabNav (nav-plus-links pattern), AppShell layout |
+| `web/src/components/command-palette/` | Cmd+K palette (Navigate/Pages/Graph/Actions sections) |
 | `web/src/components/ui/` | Button, Input, Dialog, Tooltip, Combobox (shadcn-style) |
-| `web/src/styles/tokens/` | Primitives, semantic, component, graph tokens |
-| `web/src/lib/` | Hooks (`useTheme`, `usePages`), utilities, graph-color bridge |
-| `src/mythic_proportion/web/app.py` | FastAPI mounts `/app` and `/static` |
+| `web/src/styles/tokens/` | Primitives, semantic, component, graph, motion tokens |
+| `web/src/lib/graph-colors.ts` | The single culori OKLCH-to-`THREE.Color` bridge and generative community ramp |
+| `web/src/lib/` | Hooks (`useTheme`, `usePages`), other utilities |
+| `web/public/terrain/` | Placeholder Knowledge Terrain chrome assets + `ASSET_MANIFEST.json` |
+| `src/mythic_proportion/web/app.py` | FastAPI mounts `/app` and `/static`, CORS/CSRF/upload-cap middleware |
 
 ## Performance considerations
 
@@ -322,17 +368,20 @@ Each phase adds features without breaking parity with the Python core or the sev
 - **useMemo/useCallback** — memoize derived data and event handlers to avoid unnecessary re-renders
 - **Lazy route imports** — code-split heavy routes (e.g., GraphView, AskView) to reduce initial bundle size
 - **Token reads** — graph-token reads (`getComputedStyle`) are batched on theme change, not per-render
-- **Phase 5 note** — InstancedMesh rendering and worker-frozen layout are designed to hit 60fps at 50k nodes; see `ROADMAP-BRIEF.md` §6.3 for the perf budget
+- **Single-draw-call node layer** — all four graph modes share one `InstancedMesh2` node layer with no per-node meshes, holding a single draw call at approximately 1,500 nodes and when stress-tested toward 10,000; a progressive-disclosure cap scales within that range. The physics worker owns layout for every mode so the main thread never blocks on simulation.
+- **Bounded transitions** — mode-switch transitions are capped at roughly 800ms and are interruptible, so rapid mode switching never queues up animation work.
 
 ## Accessibility
 
 - All interactive elements are keyboard-accessible (tab order, arrow keys, Enter/Space)
-- Color is never the only way to distinguish meaning (pair with icons/labels)
-- Motion respects `prefers-reduced-motion` (disabled auto-rotate in Phase 5)
-- WCAG 4.5:1 contrast for body text, 3:1 for large text + UI (both themes)
-- Semantic HTML (`<button>`, `<input>`, `<fieldset>` for groups)
+- Color is never the only way to distinguish meaning (pair with icons/glyphs/patterns) — this applies to the generated community ramp as much as to fixed-palette elements
+- Motion respects `prefers-reduced-motion`: mode transitions resolve instantly, and Terrain/Cloud/Orbital/Strata all fall back to their 2D representation under WebGL context loss
+- WCAG 4.5:1 contrast for body text, 3:1 for large text + UI (both themes), including generated community-ramp members and community-as-accent pairings, gated by `src/styles/__tests__/contrast.test.ts`
+- Semantic HTML (`<button>`, `<input>`, `<fieldset>` for groups); `TabNav` uses real links with `aria-current="page"`, not an ARIA-tabs hybrid
+- Two `aria-live` regions app-wide: one announces graph mode changes, the other covers the rest of the accessibility tree
 - ARIA labels where needed (`aria-label`, `aria-describedby`)
-- Command palette is keyboard-driven (no mouse required)
+- Command palette and Graph's per-mode accessibility tree are both fully keyboard-driven (no mouse required)
+- No native browser dialogs (`alert`/`confirm`/`prompt`/`beforeunload`) anywhere in the frontend; confirmation/acknowledgement flows use the app-owned Radix `Dialog` (`web/src/components/ui/Dialog.tsx`)
 
 ## Debugging
 

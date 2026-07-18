@@ -24,7 +24,7 @@ embeddings = ["fastembed"]
 llm = ["anthropic>=0.40"]
 authhub = ["httpx"]
 watch = ["watchdog"]
-web = ["fastapi", "uvicorn"]
+web = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy", "httpx"]
 # 3D GraphRAG expansion extras (declared in Phase 0; wired up per-phase as
 # each sub-package below gains real logic — see specs/ROADMAP-BRIEF.md §3 and

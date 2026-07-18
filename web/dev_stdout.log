@@ -1,0 +1,22 @@
+
+> mythic-proportion-web@0.1.0 dev
+> vite
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m493[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/app/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m8:23:37 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/graph/three/Graph3DScene.tsx[22m
+[2m8:23:45 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/graph/three/Graph3DScene.tsx[22m
+[2m8:24:32 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/GraphTokenCube.tsx, /src/routes/graph/GraphView.tsx[22m
+[2m8:24:47 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/GraphTokenCube.tsx, /src/routes/graph/GraphView.tsx[22m
+[2m8:24:57 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/GraphTokenCube.tsx, /src/routes/graph/GraphView.tsx[22m
+[2m8:25:07 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/GraphTokenCube.tsx, /src/routes/graph/GraphView.tsx[22m
+[2m8:25:42 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css[22m
+[2m8:25:50 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css[22m
+[2m8:26:11 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css[22m
+[2m8:32:39 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css[22m
+[2m8:33:04 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css[22m
+[2m8:35:02 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/search/search.css[22m
+[2m8:38:57 AM[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/routes/wiki/wiki.css[22m

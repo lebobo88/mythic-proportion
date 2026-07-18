@@ -78,8 +78,11 @@ export function WikiView({
                 className={
                   item.path === selectedPath
                     ? "mp-wiki-page-item mp-wiki-page-item--selected"
-                    : "mp-wiki-page-item"
+                    : selectedPath
+                      ? "mp-wiki-page-item mp-context-dimmed"
+                      : "mp-wiki-page-item"
                 }
+                aria-current={item.path === selectedPath ? "true" : undefined}
                 onClick={() => onSelectPath(item.path)}
               >
                 <div className="mp-wiki-page-item-title">{item.title}</div>

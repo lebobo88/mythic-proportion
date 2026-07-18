@@ -128,10 +128,29 @@ def collect_raw_sources(vault_root: Path) -> list[PageInfo]:
     sources: list[PageInfo] = []
 
     for content_hash_value, entry in sorted(ledger.items()):
-        raw_path = Path(entry.get("raw_path", ""))
-        if not raw_path.is_absolute():
-            raw_path = vault_root / raw_path
+        stored_raw_path = Path(entry.get("raw_path", ""))
+        raw_path = stored_raw_path if stored_raw_path.is_absolute() else vault_root / stored_raw_path
         raw_path = raw_path.resolve()
+        if not raw_path.is_file():
+            # Legacy-vault compatibility (Codex J-001 remediation cycle,
+            # finding J-004): before `ingest.pipeline.ingest_drop` resolved
+            # `vault_root` to absolute (fixed in this same job), a relative
+            # `--vault demo-vault` invocation (run from the *parent* of the
+            # vault directory) recorded a `raw_path` in the ledger like
+            # `"demo-vault/raw/<hash>.md"` -- CWD-relative, but happening to
+            # be PREFIXED with the vault directory's own name. Naively
+            # joining that onto an already-resolved `vault_root` above
+            # double-prepends the vault name and finds nothing. That fix
+            # only prevents *new* ledger writes from recording this broken
+            # shape; a vault ingested before the fix stays silently broken
+            # without this healing step. If the stored path's first
+            # component matches this vault's own directory name, retry with
+            # that one component stripped before giving up.
+            legacy_parts = stored_raw_path.parts
+            if legacy_parts and legacy_parts[0] == vault_root.name:
+                healed_path = vault_root.joinpath(*legacy_parts[1:]).resolve()
+                if healed_path.is_file():
+                    raw_path = healed_path
         if not raw_path.is_file():
             continue  # moved/deleted since ingest -- skip, don't error
 

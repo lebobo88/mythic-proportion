@@ -1,0 +1,40 @@
+Serving H:\CommandCenter\orchestrator\mythic-proportion\demo-vault at 
+http://127.0.0.1:8765/
+INFO:     127.0.0.1:63106 - "GET /app/graph HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63106 - "GET /app/assets/index-DJtNum5d.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49338 - "GET /app/assets/index-Dt57NQLJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49338 - "GET /app/assets/graph-XpmnKcvK.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62586 - "GET /app/assets/graph-DlJrXa2W.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63106 - "GET /app/assets/GraphView-CxzhAjDJ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63664 - "GET /api/pages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63106 - "GET /app/assets/forceLayout.worker-C5uhGU_L.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49338 - "GET /api/graph?mode=both HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /app/graph HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /app/assets/index-DJtNum5d.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59386 - "GET /app/assets/index-Dt57NQLJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /app/assets/GraphView-CxzhAjDJ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59386 - "GET /app/assets/graph-XpmnKcvK.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50711 - "GET /app/assets/graph-DlJrXa2W.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /api/pages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /api/graph?mode=both HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65488 - "GET /app/assets/forceLayout.worker-C5uhGU_L.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51690 - "GET /app/graph HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51690 - "GET /app/assets/index-DJtNum5d.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54636 - "GET /app/assets/index-Dt57NQLJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51690 - "GET /app/assets/GraphView-CxzhAjDJ.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54636 - "GET /app/assets/graph-XpmnKcvK.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62139 - "GET /app/assets/graph-DlJrXa2W.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54184 - "GET /api/pages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54184 - "GET /api/graph?mode=both HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54184 - "GET /app/assets/forceLayout.worker-C5uhGU_L.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51814 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58094 - "GET /app/assets/GraphView-BYBfhpFa.js HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:65210 - "GET /app/assets/graph-B9k3ud7g.js HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:51992 - "GET /app/assets/graph-DlJrXa2W.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /app/ HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /app/assets/index-DJtNum5d.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65210 - "GET /app/assets/index-Dt57NQLJ.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /api/pages HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /api/lint HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /api/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51992 - "GET /api/models HTTP/1.1" 200 OK

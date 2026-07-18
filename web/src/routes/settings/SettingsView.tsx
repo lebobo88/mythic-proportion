@@ -181,6 +181,23 @@ export function SettingsView() {
     return <p className="mp-settings-error">{loadError}</p>;
   }
 
+  // Browser-audit item 4 residual: `local: true` always routes real calls
+  // through Ollama (see `effective_provider`/`effective_model` on
+  // `ConfigResponse`, already computed server-side -- see `api.ts`'s
+  // `ConfigResponse` docstring), but this dropdown shows the raw stored
+  // `provider`/`model` (deliberately -- turning Local mode back off must
+  // restore them unchanged). Left alone, that produced a real contradiction:
+  // the dropdown reads e.g. "authhub" while the copy below it and the
+  // model-list hint both talk about Ollama/local mode. Rather than silently
+  // swap the dropdown's own value (which would lose the user's stored
+  // non-local provider choice), name the override explicitly wherever the
+  // raw and effective providers diverge, and phrase the API-key sentence in
+  // terms of whichever provider is ACTUALLY active. No new backend field:
+  // this reuses the `effective_provider`/`effective_model` pair already
+  // added for the AskView model hint.
+  const effectiveProvider = config?.effective_provider ?? provider;
+  const showLocalOverrideNote = Boolean(config?.local) && effectiveProvider !== provider;
+
   return (
     <form className="mp-settings" onSubmit={handleSubmit}>
       <div className="mp-settings-field">
@@ -197,6 +214,13 @@ export function SettingsView() {
             </option>
           ))}
         </select>
+        {showLocalOverrideNote ? (
+          <p className="mp-settings-hint mp-settings-override-note">
+            Local mode is ON, so every call actually goes through <strong>{effectiveProvider}</strong>
+            {config?.effective_model ? ` (model: ${config.effective_model})` : ""} regardless of this
+            selection. Turn Local mode off below to use this provider.
+          </p>
+        ) : null}
       </div>
 
       <div className="mp-settings-field">
@@ -226,8 +250,12 @@ export function SettingsView() {
 
       <p className="mp-settings-hint">
         {config?.has_api_key
-          ? "An API key is configured for this provider."
-          : "No API key is configured for this provider on the server -- synthesis will fail until one is set."}
+          ? `An API key is configured for ${
+              effectiveProvider === provider ? "this provider" : `the effective provider (${effectiveProvider})`
+            }.`
+          : `No API key is configured for ${
+              effectiveProvider === provider ? "this provider" : `the effective provider (${effectiveProvider})`
+            } on the server -- synthesis will fail until one is set.`}
       </p>
 
       <Button type="submit" disabled={saving}>

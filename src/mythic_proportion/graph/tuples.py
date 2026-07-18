@@ -28,6 +28,32 @@ CLAIM_STATUSES: frozenset[str] = frozenset({"TRUE", "FALSE", "SUSPECTED"})
 
 _FENCE_RE = re.compile(r"```(?:\w+)?\s*(.*?)```", re.DOTALL)
 
+#: Browser-audit item 7 (cosmetic/data-quality finding): a truncated or
+#: malformed tuple record can leak a raw delimiter artifact -- our own
+#: `TUPLE_DELIM`/`COMPLETION_DELIM` tokens, optionally followed by stray
+#: trailing digits (e.g. `<|>7` -- a `TUPLE_DELIM` immediately followed by a
+#: leaked relationship-strength value) -- into a neighboring entity/subject/
+#: object field. Built directly from the actual delimiter constants (not a
+#: generic heuristic) so it can never drift out of sync with them, and so it
+#: never strips legitimate `<...>`-shaped prose that isn't one of *our*
+#: control tokens, nor a legitimate digit elsewhere in a title (e.g.
+#: "APOLLO 11") that isn't immediately preceded by a leaked delimiter.
+_CONTROL_TOKEN_RE = re.compile(
+    r"(?:" + "|".join(re.escape(token) for token in (COMPLETION_DELIM, TUPLE_DELIM)) + r")\d*"
+)
+
+
+def _sanitize_title_text(title: str) -> str:
+    """Strip leaked delimiter control tokens and collapse every whitespace
+    run -- including an embedded newline/tab from a source-text mid-name
+    line wrap -- into a single space, ahead of the strip+uppercase dedup
+    key. This is the fix for two browser-audit item 7 findings: a duplicate
+    "PRIYA ANAND" PERSON node (one copy carried a literal embedded newline
+    because the source text itself line-wraps mid-name, so it hashed to a
+    different dedup key than the clean form) and a LOCATION node carrying a
+    raw `<|>7`-shaped delimiter artifact."""
+    return re.sub(r"\s+", " ", _CONTROL_TOKEN_RE.sub("", title))
+
 
 def strip_markdown_fences(text: str) -> str:
     """Return the inside of a ```...``` fence if present, else ``text`` unchanged."""
@@ -149,13 +175,21 @@ def parse_tuple_records(raw_text: str) -> list[list[str]]:
 
 
 def normalize_title(title: str) -> str:
-    """Normalize an entity/subject/object title for dedup: strip + uppercase.
+    """Normalize an entity/subject/object title for dedup: sanitize, collapse
+    whitespace, strip, and uppercase.
 
     ``entities.UNIQUE(title, type)`` depends on every producer of a title
     (extraction, claims, the reader in ``graph.store``) normalizing
-    identically -- this is the single function that does it.
+    identically -- this is the single function that does it. See
+    :func:`_sanitize_title_text` for the browser-audit item 7 fix this
+    added: leaked delimiter control tokens are stripped and every
+    whitespace run (including an embedded newline from a source-text
+    mid-name line wrap) collapses to a single space *before* the
+    strip+uppercase dedup key is built, so e.g. ``"Priya\\nAnand"`` and
+    ``"Priya Anand"`` now hash to the same entity instead of producing two
+    near-duplicate PERSON nodes.
     """
-    return title.strip().upper()
+    return _sanitize_title_text(title).strip().upper()
 
 
 def normalize_entity_type(raw_type: str) -> str:

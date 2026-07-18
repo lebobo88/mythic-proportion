@@ -6,7 +6,11 @@ an LLM *incrementally compiles and maintains* a persistent wiki of Markdown
 pages that *accumulates* knowledge and cross-references over time. Knowledge
 **compounds** rather than being rediscovered.
 
-## The three layers
+## The layers
+
+The core LLM-Wiki pipeline is three layers; the web UI, GraphRAG data layer,
+3D graph frontend, and privacy layer are built on top of them as Layers 4–6
+below.
 
 ```
 drop/ --ingest--> raw/ (Layer 1)      --compile--> wiki/ (Layer 2)   --index--> .index/ + schema/index/hot (Layer 3)
@@ -52,19 +56,91 @@ no-degradation decision" below).
 
 ### Layer 4 — `web/` (the local web UI)
 
-`mythic serve` boots a local FastAPI app (`web/app.py`'s `create_app`) that
-serves a vanilla-JS single-page app (`web/static/`) over six tabs (Wiki,
-Search, Ask, Graph, Ingest, Lint) plus a small JSON API
-(`/api/pages`, `/api/page`, `/api/search`, `/api/query`, `/api/graph`,
-`/api/ingest`, `/api/upload`, `/api/lint`, `/api/lint/fix`). Every route is a
-thin wrapper around the exact same building blocks the CLI already uses —
-`ingest_drop`, `compile_source`, `IndexStore`/`hybrid_search`,
-`answer_query`, `lint_vault`/`lint_fix` — so the web UI can never drift from
-CLI behavior; it is a second entry point onto Layers 1–3, not a parallel
-implementation. `fastapi`/`uvicorn` (the optional `web` extra) are imported
+`mythic serve` boots a local FastAPI app (`src/mythic_proportion/web/app.py`'s
+`create_app`) that serves **two frontends side by side**:
+
+- **`/app`** — the current React + React-Three-Fiber application
+  (`web/src/`), built via `cd web && npm run build` into
+  `src/mythic_proportion/web/static_next/` and mounted at `/app` only if
+  that directory exists (otherwise `/app` 404s). Seven views (Wiki, Search,
+  Ask, Graph, Ingest, Lint, Settings); see `docs/frontend.md` for the full
+  frontend architecture, the four-mode Graph view, and the Cmd+K palette.
+- **`/`** — the original vanilla-JS single-page app (`web/static/`),
+  preserved unchanged for parity. Retiring it is deferred, unscheduled
+  future work.
+
+Both frontends consume the same JSON API: `GET /api/pages`, `GET /api/page`,
+`GET /api/search`, `POST /api/query`, `GET /api/graph`, `POST /api/ingest`,
+`POST /api/upload`, `GET /api/ingest/status`, `GET /api/jobs/{id}`,
+`POST /api/index-graph` plus its status route, `GET /api/lint`,
+`POST /api/lint/fix`, `GET`/`POST /api/config`, `GET /api/models`. Every
+route is a thin wrapper around the exact same building blocks the CLI
+already uses — `ingest_drop`, `compile_source`, `IndexStore`/
+`hybrid_search`, `answer_query`, `lint_vault`/`lint_fix`, and the GraphRAG
+pipeline described below — so neither web frontend can drift from CLI
+behavior; both are entry points onto the layers below, not parallel
+implementations. `fastapi`/`uvicorn` (the optional `web` extra) are imported
 lazily inside `create_app` (and inside the CLI's `serve` command body), so
-the rest of the package — including the other five CLI verbs — stays
+the rest of the package — including the other six CLI verbs — stays
 importable without them.
+
+**Security hardening** (`src/mythic_proportion/web/app.py`): CORS is
+restricted via `CORSMiddleware` to a closed allowlist of the four known
+local origins (`127.0.0.1`/`localhost` on ports 8765 and 5173), with
+`allow_credentials=False` and no wildcard. A `_csrf_protection` middleware
+rejects any state-changing `/api/*` POST request (`/api/upload`,
+`/api/ingest`, `/api/index-graph`, `/api/lint/fix`, `/api/config`) whose
+`Origin`/`Referer` header does not match the allowlist; requests with
+neither header (curl, non-browser local clients, `TestClient`) pass through,
+since this is a browser-CSRF defense, not a general auth boundary — the app
+has none, since it is a local single-user tool. A `_UploadSizeLimitMiddleware`
+enforces a 50MB cap on `POST /api/upload` by counting streamed request-body
+bytes as they arrive, before FastAPI's `UploadFile` parsing runs, closing a
+resource-exhaustion gap that a post-parse-only check would leave open.
+
+### Layer 5 — GraphRAG data layer and 3D graph frontend
+
+On top of the wikilink graph, `src/mythic_proportion/graph/{extract,tuples,
+chunk,claims,communities,reports,store,cache,index}.py` implements a
+GraphRAG-style semantic layer: delimited-tuple entity/relationship/claim
+extraction from `raw/` source documents, hierarchical Leiden community
+detection (`graspologic` primary, `leidenalg` plus `igraph` as the Windows
+fallback, gated behind the `[graphrag]` extra), community reports, and a
+`GraphStore` over the same SQLite database. `mythic index-graph` (and the
+`/api/index-graph` route, and an opt-in "auto-build after ingest" Settings
+toggle, off by default) builds and refreshes this layer; it never runs
+implicitly. Retrieval `query/modes.py` implements GLOBAL/LOCAL/DRIFT/
+spreading-activation modes; the `/api/query` mode contract is preserved
+as-is — a request that omits `mode` returns the legacy five-key
+`{text, citations, hits, used_llm, error}` shape unconditionally.
+
+`GET /api/graph?mode=wikilinks|entities|both` projects this data for the
+frontend: `wikilinks` (default) is the original page graph, `entities` is
+the GraphRAG semantic graph, and `both` is their union with page/entity
+dedup gated on both title match and real extraction provenance (never title
+alone). Entity nodes carry already-computed `community`/`level`/`centrality`
+fields where a stored Leiden-community row exists; this is a projection of
+already-computed server-side output, not new graph computation on the
+request path.
+
+The 3D graph frontend (`web/src/routes/graph/`) renders this data through
+four switchable modes (Cloud, Orbital Systems, Strata, Knowledge Terrain)
+sharing one single-draw-call `InstancedMesh2` node layer and a physics
+worker; see `docs/frontend.md` for the full breakdown.
+
+### Layer 6 — privacy layer
+
+`src/mythic_proportion/privacy/redact.py` provides Presidio-based,
+fail-closed PII redaction (plus a dependency-free `SecretScanRecognizer` and
+an optional `OpenAIPrivacyFilter`) wrapping every outbound cloud LLM call,
+including GraphRAG extraction's repair/gleaning rounds. `src/mythic_proportion/
+llm/ollama.py` provides a local Ollama provider (default model `qwen2.5:7b-instruct`,
+structured outputs) with a loopback-only egress gate enforced both when
+settings are saved and when an LLM client is constructed
+(`effective_allow_egress` — `local: true` always wins over any other
+provider setting). See `docs/security/` for the full threat model, control
+matrix, data classification, and SBOM, and `docs/faq-graphrag-extraction-fixes.md`
+for the post-launch extraction and egress-gate fix history.
 
 ## Pluggable LLM provider layer
 

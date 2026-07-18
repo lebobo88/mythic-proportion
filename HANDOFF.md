@@ -1,115 +1,206 @@
 # HANDOFF — mythic-proportion 3D GraphRAG Second Brain
 
-**For the next session continuing this build.** Read this + the two memory sources, then continue at Phase 7.
-
----
+**Correction notice.** This file previously told the next session to "continue
+at Phase 7" on branch `feat/3d-graphrag` using FABLE-HARNESS primitives, and
+to `git push origin feat/3d-graphrag`. That instruction is superseded and was
+already flagged as contradictory by an independent plan-review finding
+(`docs/plans/mythic-proportion-audit-fix-design.md`, J-001, in the
+orchestrator control repository) before this correction. The reality below
+reflects the actual state after that plan's Phase 3 (fix/remediation) and
+Phase 4 (four-mode graph design expansion) both landed. Do not follow any
+"continue at Phase 7" or "push `feat/3d-graphrag`" instruction from an older
+copy of this file.
 
 ## 1. What this is
 
-A greenfield rebuild of `mythic-proportion` (a local LLM-Wiki "second brain") into a **full Microsoft-GraphRAG-parity** memory engine with a **3D WebGL knowledge graph**, a ground-up OKLCH design system, a local privacy layer, an agent layer, and an MCP server — built **exclusively with FABLE-HARNESS primitives** (typed `engineer`/`verifier`/`designer` agents + the `/run` lifecycle), Chrome-validated every phase.
+A local LLM-Wiki "second brain" grown into a full GraphRAG-parity memory
+engine with a 3D WebGL knowledge graph (four switchable modes), a ground-up
+OKLCH design system, a local privacy layer, and hardened local-only web
+security. An agent layer and an MCP server remain deferred, unbuilt
+non-goals — see Section 3 below.
 
-- **Master plan (live status + amendments):** `mythic-proportion/specs/mythic-proportion-3d-graphrag.html` (planf3 HTML; P0–P6 marked `[x]`).
-- **Grounding brief (as-is map + 6 cited research threads):** `mythic-proportion/specs/ROADMAP-BRIEF.md`.
-- **Curated memory:** `H:\FABLE-HARNESS\memory\` (invariants.md, decisions). **Auto-memory:** `~/.claude/projects/H--FABLE-HARNESS/memory/MEMORY.md` → `mythic-proportion-project.md` (the single most useful status file — read it first).
+- **Source of truth for scope and status**: `docs/plans/mythic-proportion-audit-fix-design.md`
+  in the orchestrator control repository (`H:\CommandCenter\orchestrator`),
+  approved by the user on 2026-07-16/17. That plan, not this file's older
+  revisions, governs what is in scope, what is deferred, and what approvals
+  are still required.
+- **Master plan (live status + amendments)**: `mythic-proportion/specs/mythic-proportion-3d-graphrag.html`.
+- **Grounding brief**: `mythic-proportion/specs/ROADMAP-BRIEF.md`.
 
-## 2. Repos & branch
+## 2. Repo and branch state
 
-- **Two public GitHub repos** (account `lebobo88`, gh authed via SSH):
-  - `github.com/lebobo88/mythic-proportion` — the app. **All P0–P5 work is on branch `feat/3d-graphrag`** (branch off `main`; merges to `main` at P10 cutover).
-  - `github.com/lebobo88/fable-harness` — the harness (`H:\FABLE-HARNESS`), on `main`. `.gitignore`s `mythic-proportion/` (sibling repo, not nested-tracked).
-- Latest commit on `feat/3d-graphrag`: `3c3c5b7` (P6 complete). `main` = baseline only (`f15584c`) + the P0-P5 HANDOFF (`2238cd7`) — `main` has not been fast-forwarded past that; it stays untouched until the P10 cutover merge.
+- **Local `main`** is the source of truth for the current working tree. It
+  contains the completed merge of `feat/3d-graphrag` (P0–P6) plus the
+  subsequent Phase 3 (security/documentation remediation) and Phase 4
+  (four-mode graph design expansion) work.
+- **No push has occurred and none is authorized** without a separate,
+  explicit, later user approval. `origin/feat/3d-graphrag` and `origin/main`
+  remain at their prior state, untouched by this local work.
+- **This repository's execution harness is the Claude Code Orchestrator's
+  Planner → T2-engineer → Verifier → Browser Validator pipeline**, per the
+  approved plan's Section 10.1 routing override (T2 as the sole engineering
+  writer, no prior T1 attempt, standard gates). FABLE-HARNESS's `/run`
+  lifecycle, its typed `engineer`/`verifier`/`designer` agents, and its
+  execution pattern described later in this file (Section 6, historical)
+  are **not** the operative harness for any further work on this repo
+  going forward, unless a future plan explicitly reintroduces them.
 
-## 3. Status — 7 of 11 milestones done, all committed + pushed
+## 3. Status — what is done and what is deferred
 
-| Phase | State | Notes |
+| Area | State | Notes |
 |---|---|---|
-| **P0** dual-repo scaffold | ✅ | Vite/R3F workspace, FastAPI `/app`, legacy `/` preserved |
-| **P1** design system | ✅ | OKLCH 3-tier tokens + `--graph-*`→THREE.Color, shadcn-style primitives, Cmd+K palette, theming |
-| **P2** seven React views + parity | ✅ | Wiki/Search/Ask/Graph/Ingest/Lint/Settings on `/api/*`; +security docs + tests |
-| **P3** GraphRAG data layer | ✅ | entities/relationships/claims/text-units, delimited-tuple extraction, `llm_cache`, incremental; edge-dedup fix |
-| **P4** communities + retrieval | ✅ | graspologic Leiden + community reports + GLOBAL/LOCAL/DRIFT/spreading-activation; mode-contract fix |
-| **P5** 3D graph frontend | ✅ | R3F + InstancedMesh2, worker layout, 2D fallback + a11y tree; **Chrome-validated at 10k** after a hardening pass |
-| **P6** local privacy layer | ✅ | Presidio+OpenAI-filter redaction (fail-closed, all outbound edges), bge-small default embeddings, real Ollama client + `local:true` selector, `effective_allow_egress` enforcement, Settings UI |
-| **`/run` plumbing fix** | ✅ | harness fix (`fable-harness` `d084e6e`) making `/run` self-report truthfully |
+| **P0–P6** (dual-repo scaffold, design system, seven views, GraphRAG data layer, communities + retrieval, 3D graph frontend, privacy layer) | Done, merged | See Section 6 below for the historical build narrative. |
+| **GraphRAG extraction bugfixes** (post-P6) | Done | Four root-caused defects fixed; see Section 6a. |
+| **Security hardening** (CORS, CSRF, upload cap) | Done | CORS restricted to a small local-origin allowlist (127.0.0.1/localhost on the app's dev and prod ports), no wildcard. CSRF origin/referer checks on all state-changing `/api/*` POST routes. A 50MB upload cap enforced by streaming byte-count, closing a resource-exhaustion gap a post-parse-only check would leave open. |
+| **Documentation refresh** | Done | Root `README.md` and `docs/architecture.md`/`usage.md`/`frontend.md` now reflect the current merged state (this correction pass). |
+| **Four-mode graph design expansion** | Done | Cloud (original force-directed view), Orbital Systems, Strata, Knowledge Terrain — see `docs/frontend.md` for the full breakdown. Enriched `GET /api/graph?mode=both\|entities` projects already-computed Leiden community/level/centrality data. |
+| **Overall-app Standard upgrade** | Done | First-class reading/detail pane (Wiki, Search, Ask, Graph), Cmd+K command palette with grouped sections, TabNav corrected to a conformant nav-plus-links pattern, generative OKLCH community color ramp with a fixed light-theme contrast bug closed. |
+| **Terrain asset capture** | Done | Placeholder chrome assets at `web/public/terrain/` (two skybox images, two matcap textures, two landmark GLBs), all enhancement-only with a working fallback; `ASSET_MANIFEST.json` documents generation parameters. |
+| **P7 — agent layer** | **Deferred non-goal** | `agents/__init__.py` is still a one-line stub. Not scheduled by the current plan; requires its own planning pass before any implementation begins. |
+| **P8 — MCP server** | **Deferred non-goal** | `mcp/__init__.py` is still a one-line stub; no `mythic mcp` CLI verb exists. Not scheduled. |
+| **P9 — broader ComfyUI product pipeline** | **Deferred non-goal**, beyond the Terrain asset capture in this pass | No `tools/` ComfyUI directory exists for a standing product pipeline. |
+| **P10 — cutover** (retire legacy `/` SPA and `web/static/`) | **Deferred non-goal** | The legacy SPA is intentionally preserved for parity; retiring it is not scheduled. |
 
-**Test baselines (keep green):** Python **`pytest` = 351, 1 pre-existing unrelated flaky live-Ollama skip** · frontend **`vitest` = 103** (untouched by the bugfix below) · `cd web && npm run build` succeeds.
+**Test/build baselines (current, verified against the live working tree)**:
+pytest 419 passed, 0 failed, across 30 test files; vitest 380 passed across
+42 test files; ruff clean; mypy clean (57 source files); `tsc --noEmit`
+clean; `npm run build` succeeds (one non-blocking >500kB chunk-size
+advisory, not an error). Egress-gate tests (11) green in isolation. These
+counts supersede any earlier baseline recorded elsewhere in this file's
+history (351 pytest / 103 vitest) — the growth is almost entirely new Phase
+4 test files.
 
-## 3a. GraphRAG extraction bug-fix (post-P6, 2026-07-12 — not a phase, but load-bearing for P7+)
+**Known limitation, investigated and closed**: a rare (originally ~1-in-5)
+transient rendering glitch during Orbital-to-Cloud mode transitions was
+root-caused (a stale rendering-detail threshold briefly affecting real,
+currently-visible nodes during the transition animation) and fixed. A
+dedicated Browser Validator session ran 20 repeated Orbital→Cloud
+transitions after the fix and observed the artifact zero times — a strong,
+but probabilistic (not absolute), confidence result for a rare bug.
 
-The user reported ingesting real research documents produced only topics/links with no actual detail. Live investigation found the GraphRAG extraction pipeline (`mythic index-graph`) had **four root-caused defects**, all now fixed on `feat/3d-graphrag` across commits `b5ec6e1`→`aefdac2`:
+**Local environment note**: ComfyUI/Trellis2 asset generation for the
+Terrain pass required two local, no-new-download environment adjustments on
+this machine; both are documented in `web/public/terrain/ASSET_MANIFEST.json`
+for anyone regenerating assets later.
 
-1. **Wiring gap**: `index-graph` was a fully orphaned, hidden CLI command — no real entry point (`ingest`, web UI, `watch`) ever called it. Fixed: un-hidden CLI, new `POST /api/index-graph` + status polling (`GraphJob` in `web/jobs.py`, live-polled every 1s in the Ingest view — real progress UI: text units/entities/relationships/claims/LLM-call counts), and an opt-in "auto-build after ingest" Settings toggle (off by default, real LLM cost).
-2. **Source-of-truth gap**: extraction read `wiki/` (already-compressed 12k-char-capped summaries) instead of `raw/` (original documents) — the actual root cause of "no detail." Fixed via `collect_raw_sources()` (`web/pages.py`), reusing the ingest parser.
-3. **Tuple parser truncation**: the extraction prompt's own worked example taught the model the wrong record delimiter, corrupting ~89% of entities with leaked tuple syntax. Fixed: corrected the prompt example + added balanced-paren-group fallback parsing.
-4. **PII cloud-egress leak (security)**: repair/gleaning rounds re-redacted already-rehydrated (real-PII) text from scratch each call, and Presidio measurably under-detects PII in tuple-formatted text — real PII could reach the cloud LLM on retry rounds. Fixed via turn-scoped redaction (`RedactingExtractionClient.redact_for_turn()`/`complete_raw()`/`rehydrate_turn()` in `privacy/redact.py`, orchestrated by `graph/extract.py`'s `_cached_turn_call`/`_finish_turn`) — redacted text never re-enters cleartext until the very end of an extraction turn.
+## 4. How to run it today
 
-**Two more real bugs surfaced only at production scale** (found live-testing against a real vault with ~800+ extraction turns, far beyond what the fix's own test suite exercised):
-- **GPU OOM** (`8eb8517`): the PII-detection transformer model had no input-length cap, so large community-report prompts (now possible since extraction reads full `raw/` docs) could try to allocate 24GB+ on a 12GB GPU. Fixed with chunked pipeline calls (2500-char budget) + offset remapping.
-- **Rehydration token-matching fragility** (`aefdac2`): `Redactor.rehydrate()` did an exact-string match for `"[REDACTED_TYPE_N]"`, but real LLMs don't always echo that token byte-for-byte (drop brackets, turn underscores to spaces, fuse it against adjacent text) — causing ~1.6% of entity titles to end up with a literal leftover `REDACTED_*` fragment instead of the real value. This was a **local data-quality bug, not a further security leak** — the turn-scoped redaction already ensured nothing unmasked reached the cloud; this was purely about restoring the right value afterward. Fixed with permissive regex-based matching (bracket-optional, underscore/space-tolerant) as a fallback after the exact match, fail-open preserved.
+```bash
+pip install 'mythic-proportion[web]'   # plus [graphrag], [privacy], [local] extras as needed
+cd web && npm install && npm run build  # required before /app serves; not committed to the repo
+mythic serve --vault ./my-vault         # defaults to 127.0.0.1:8765
+mythic index-graph --vault ./my-vault   # build/refresh the knowledge graph before Graph has real data
+```
 
-**Verified clean** on a fresh 2-document test vault (`playground`, wiped and re-ingested with `Enterprise Master AI Orchestration System Architecture.md` + the `LLM Wiki Second Brain...Blueprint.md`, both from the repo root): 2087 entities → 1638 after dedup, 1794 relationships, 69 claims, **zero literal `REDACTED_*` token leaks** (regex-verified), **3/1638 (0.18%) residual parser-garbling entities** (down from ~89% pre-fix — tracked follow-up below, low priority). Live Chrome: Wiki pages show real, accurate, substantive summaries with correct cross-links; 3D graph renders ~1600+ real nodes with visible community clustering; zero console errors.
+See the root `README.md` and `docs/usage.md` for the full command and
+configuration reference, and `docs/frontend.md` for the frontend
+architecture. To regenerate Terrain assets, ComfyUI's local REST API runs at
+`H:\LocalAI\ComfyUI` (the same local GPU install used for this pass), with
+full reproducible parameters in the asset manifest.
 
-**Docs**: `docs/security/security-advisory-graphrag-extraction-20260712.md`, `docs/faq-graphrag-extraction-fixes.md`, `docs/CHANGELOG.md` — corrected after an independent verification pass caught the first-draft security advisory recommending disabling redaction as a "mitigation" (actively dangerous — that increases exposure). Final version only recommends stopping extraction or switching to a local provider, plus a real incident-response section (check provider logs, request deletion, cannot retract already-sent data).
+## 5. What a future session should do
 
-**⚠ Not yet pushed** — verify from disk before pushing per the lesson below, then `git push origin feat/3d-graphrag`.
+Do **not** resume the old "continue at Phase 7" instruction. If the user
+wants to scope P7 (agent layer), P8 (MCP server), a broader P9 asset
+pipeline, or P10 (legacy-SPA cutover), that requires a new planning pass
+through the orchestrator's Planner, producing a fresh approved plan — the
+same governance this closeout itself followed. No engineering writer may
+start work against deferred scope without that explicit approval sequence.
 
-**Tracked follow-ups from this fix:**
-- 3/1638 (0.18%) entities still show minor tuple-delimiter parser garbling in rare cases the balanced-paren fallback doesn't catch — low priority, cosmetic only.
-- **Harness (still open, found in P6, confirmed again here):** `codex-review.ps1` splits a single run's `.fable/<run_id>/` artifacts across two directories depending on dispatching-agent cwd, causing false-negative rejects on stages that already passed. Needed independent from-disk re-verification of 5 of this run's 5 initial "reject" stages (2 turned out stale/false-negative, 3 were genuine and got fixed).
-- **New, user-requested, not yet scoped**: no token/cost tracking or persistent observability/analytics anywhere in the app (`GraphJob` tracks counts but not tokens/cost, nothing persists past the in-memory job). User wants a **full observability layer**: token/cost tracking + persistent run-history table + a dashboard/analytics view. This is real, separately-scoped follow-up work — needs its own planning pass before building (new DB schema, new UI view, historical aggregation across ingest/compile/query/extraction).
+## 6. Historical build narrative (P0–P6, for context)
 
-### Remaining phases (do these next, in order)
-- **P7 — Agent layer:** Extractor/Refiner/Librarian on a lean custom orchestrator; optional PydanticAI `[agents]` extra (NOT LangGraph). Surface Refiner maintenance in the UI. This phase should route compile/query/extraction through the P6 redaction wrapper by default (agents inherit privacy, per the plan's sequencing rationale).
-- **P8 — MCP server:** FastMCP over **stdio**, read tools default + opt-in transactional writes + JSONL audit + `--read-only` default. `mythic mcp` CLI verb. Security-flagged → cross-vendor judging will fire.
-- **P9 — ComfyUI asset pipeline (optional):** localhost `tools/comfy_gen.py` for design/graph textures. ComfyUI is at `H:\LocalAI\ComfyUI` (venv `.venv312`, port 8188, RTX 3080 Ti; SDXL Juggernaut-XL/RealVisXL + Hunyuan3D/TripoSR/Trellis for 3D). Already used this session to generate the plan's ComfyUI figures.
-- **P10 — Cutover:** retire legacy `/` SPA + `web/static/`, merge `feat/3d-graphrag` → `main`, tag, push, regenerate `docs/` api-docs.
+The following sections are preserved from the original build history for
+context. They describe how P0–P6 were originally built using FABLE-HARNESS
+primitives; that harness is no longer the operative one for this repo (see
+Section 2). Environment-specific details below (bash whitelist behavior,
+harness script paths, `.fable/` artifacts) are historical and may not apply
+to the current execution environment.
 
-## 4. How to execute a phase (the proven pattern — follow it exactly)
+**P0** dual-repo scaffold — Vite/R3F workspace, FastAPI `/app`, legacy `/`
+preserved. **P1** design system — OKLCH 3-tier tokens, `--graph-*` →
+`THREE.Color`, shadcn-style primitives, Cmd+K palette, theming. **P2** seven
+React views + parity — Wiki/Search/Ask/Graph/Ingest/Lint/Settings on
+`/api/*`, plus initial security docs and tests. **P3** GraphRAG data layer —
+entities/relationships/claims/text-units, delimited-tuple extraction,
+`llm_cache`, incremental indexing, an edge-dedup fix. **P4** communities +
+retrieval — `graspologic` hierarchical Leiden, community reports,
+GLOBAL/LOCAL/DRIFT/spreading-activation modes, a mode-contract fix. **P5**
+3D graph frontend — R3F + `InstancedMesh2`, worker-owned layout, 2D fallback
+plus an accessibility tree, Chrome-validated at 10k nodes after a hardening
+pass. **P6** local privacy layer — Presidio + OpenAI-filter redaction
+(fail-closed, all outbound edges), `bge-small` default embeddings, a real
+Ollama client with a `local: true` selector, `effective_allow_egress`
+enforcement, a Settings UI.
 
-1. **Mint a run + launch `/run` via `scriptPath`** (name resolution is flaky — always use scriptPath):
-   ```
-   # in pwsh: mint run_id, create .fable/<run_id>/{artifacts,stages,verdicts}, write .fable/current-run (no trailing newline)
-   Workflow({ scriptPath: "H:\\FABLE-HARNESS\\.claude\\workflows\\run.js",
-              args: { run_id: "<ts>-pN-slug", request: "<detailed phase request>" } })
-   ```
-   Scope the `request` tightly (STANDARD scope, in-place, no worktrees; target `feat/3d-graphrag`; tests MUST mock the LLM; keep prior tests green; commit with the `Co-Authored-By: Claude Opus 4.8 (1M context)` trailer).
-2. **Never trust the run's `surfaced`/verdict — VERIFY FROM DISK:** `git log`, run `pytest` + `npx vitest run` + `npm run build`, inspect the actual files. The `/run` cross-vendor (Codex) reviews reliably catch **real** contract/perf/data-integrity bugs — read the `.fable/<run>/verdicts/*.json` reject reasons.
-3. **Close every real cross-vendor finding** with a focused `engineer` fix (commit, don't push yet), then re-verify.
-4. **Chrome-validate live** (see §5) — this session repeatedly caught real defects that green tests + fallbacks masked (esp. the 3D scene).
-5. **Finalize:** flip the phase chip to `[x]` + append an Amendment in the plan HTML, commit the plan, `git push origin feat/3d-graphrag`, update `mythic-proportion-project.md` memory, clear `.fable/current-run`.
+### 6a. GraphRAG extraction bug-fix (post-P6, 2026-07-12)
 
-## 5. Environment facts & gotchas (IMPORTANT)
+Live investigation of a real user report (ingesting real research documents
+produced only topics/links with no actual detail) found four root-caused
+defects in the GraphRAG extraction pipeline (`mythic index-graph`), all
+fixed:
 
-- **N6 bash whitelist** (deny-by-default): allowed head-verbs = git/gh/ls/cat/head/tail/wc/echo/pwd/cd/mkdir/touch/diff/find/grep/rg/awk/sed/node/npm/npx/python/python3/pip/pytest/pwsh/jq/tar/which + shell keywords. **Blocked:** `sort`, `sleep`, bare `VAR=value`, and **invoking python by full path** (use the `python` verb; wrap anything else in `pwsh -NoProfile -Command "..."`).
-- **`mythic` console script is NOT whitelisted.** To serve: `python <scratch>/serve_app.py` where serve_app.py sets `sys.argv=['mythic','serve','--vault',<vault>,'--no-browser','--port','8765']` then `from mythic_proportion.cli.app import app; app()`.
-- **Chrome-validating the 3D graph:** the synthetic loader (`?syntheticGraph=N`) is **DEV-only** (`import.meta.env.DEV`), so run the **Vite dev server**: `cd web && npm run dev` → `http://localhost:5173/app/`, load `?syntheticGraph=10000`, click the **Graph** tab, **wait ~15s** for the worker layout to settle + camera-fit. For non-graph views, the FastAPI-served build at `http://127.0.0.1:8765/app/` is fine (StaticFiles serves the current `static_next` from disk). `file://` URLs are blocked by the Chrome extension — always serve over http.
-- **LLM path IS available:** AuthHub gateway runs on `localhost:3000` (HTTP 200); an `AUTHHUB_API_KEY` is in `mythic-proportion/.env.development` (NOT auto-loaded into the process env). **All `/run` tests mock the LLM** (no key/network needed). For real extraction/report validation, load the key + point at localhost:3000 — but that spends real DeepSeek credits, so keep it minimal.
-- **`/api/query` mode contract (binding invariant — see `H:\FABLE-HARNESS\memory\invariants.md`):** `mode` has **no default**; a request that OMITS `mode` returns the exact legacy shape `{text,citations,hits,used_llm,error}` unconditionally. Don't regress this.
-- **`.fable/` is gitignored** — run artifacts/verdicts are ephemeral; only committed code + `docs/` + `specs/` persist.
+1. **Wiring gap** — `index-graph` was a fully orphaned, hidden CLI command.
+   Fixed: un-hidden CLI, `POST /api/index-graph` plus status polling (live
+   progress UI in the Ingest view), and an opt-in "auto-build after ingest"
+   Settings toggle (off by default, since extraction spends real LLM calls).
+2. **Source-of-truth gap** — extraction read `wiki/` (already-compressed
+   summaries) instead of `raw/` (original documents). Fixed via
+   `collect_raw_sources()`, reusing the ingest parser.
+3. **Tuple parser truncation** — the extraction prompt's own worked example
+   taught the model the wrong record delimiter, corrupting most entities
+   with leaked tuple syntax. Fixed: corrected prompt example plus a
+   balanced-paren-group fallback parser.
+4. **PII cloud-egress leak (security)** — repair/gleaning rounds re-redacted
+   already-rehydrated (real-PII) text from scratch each call, and Presidio
+   measurably under-detects PII in tuple-formatted text. Fixed via
+   turn-scoped redaction (`privacy/redact.py`'s `redact_for_turn()`/
+   `complete_raw()`/`rehydrate_turn()`, orchestrated by `graph/extract.py`):
+   redacted text never re-enters cleartext until the very end of an
+   extraction turn.
 
-## 6. Constraints (hard — from the user & CONSTITUTION.md)
+Two further bugs surfaced only at production scale: a GPU-OOM risk in the
+PII-detection transformer on large community-report prompts (fixed with a
+chunked pipeline call plus offset remapping), and a rehydration
+token-matching fragility that left rare literal `REDACTED_*` fragments in
+entity titles — a local data-quality bug, not a further security leak, since
+turn-scoped redaction already ensured nothing unmasked reached the cloud
+(fixed with permissive regex-based matching, fail-open preserved).
 
-- **FABLE-HARNESS primitives ONLY.** **No Hydra, no pair-programmer (`pp:*`/`mcp__pp_*`), no smith, no eights.** (This session ran with Hydra explicitly disabled.)
-- **Fable-5 (`/plan-deep`) is planning-only (N2)** — never the build. Everything is built by typed `engineer` + verified by `verifier`.
-- Keep the **Python core importable with no optional extras** (heavy deps are lazily-imported extras).
-- Every web route stays a **thin wrapper over the same building blocks the CLI uses**. Structured LLM output is **prompted strict-JSON / delimited tuples** (no native tool-calling).
-- **Chrome validation every phase.**
+**Docs**: `docs/security/security-advisory-graphrag-extraction-20260712.md`,
+`docs/faq-graphrag-extraction-fixes.md`, `docs/CHANGELOG.md`.
 
-## 7. Tracked follow-ups (documented, deferred to their phases)
+### 6b. Environment facts that may still be relevant
 
-- ~~Unredacted cloud-LLM egress → P6~~ **CLOSED in P6** (redaction wraps every outbound LLM edge, fail-closed; `effective_allow_egress` now enforced).
-- CORS/CSRF on state-changing `/api/*` + upload size cap → security hardening.
-- Narrow single-user re-cluster/report-generation concurrency race (P4) — documented + accepted.
-- Regenerate `docs/` api-docs (P4/P5/P6 drift) → the P10 docs pass.
-- **Harness:** `run.js` still dispatches the same-tier judge **untyped** (latent N7 gap) — author a typed `judge-same-tier` agent (via `meta-agent`).
-- **Harness:** `missability-inspector` occasionally false-negatives "artifacts empty" (flaky, e.g. P1 & P5 runs) — the artifacts do exist; verify from disk. Worth hardening its path/timing.
-- **Harness (NEW, found in P6):** `codex-review.ps1` (the cross-vendor judge dispatcher) resolves a run's `.fable/<run_id>/` artifact paths relative to the dispatching agent's `cwd`, which can split a single run's artifacts across TWO directories (e.g. `H:\FABLE-HARNESS\.fable\...` vs `H:\FABLE-HARNESS\mythic-proportion\.fable\...`), causing the judge to see "no artifacts" on stages that had already genuinely passed and stamp a false reject. Caused 4 of P6's 8 nominal "reject" stages. Needs a root-cause fix (resolve against the harness root, not cwd) before P7.
-- **Ollama not installed in this environment** — `llm/ollama.py`'s real request/response handling is verified by direct code read + mocked tests only; no live local-model smoke test has been run. If P7's agent layer needs to exercise the local path live, install Ollama + pull `qwen2.5:7b-instruct` first.
+- **Chrome-validating the 3D graph**: the synthetic loader
+  (`?syntheticGraph=N`) is dev-only (`import.meta.env.DEV`), so use the Vite
+  dev server (`cd web && npm run dev` → `http://localhost:5173/app/`), load
+  `?syntheticGraph=10000`, open the Graph tab, and wait for the worker
+  layout to settle plus camera-fit. For non-graph views, the FastAPI-served
+  build at `http://127.0.0.1:8765/app/` works once `npm run build` has run.
+- **`/api/query` mode contract (binding invariant)**: `mode` has no default;
+  a request that omits `mode` returns the exact legacy shape
+  `{text, citations, hits, used_llm, error}` unconditionally. This must not
+  regress.
+- **Ollama** may not be installed in every environment; `llm/ollama.py`'s
+  request/response handling should be verified by direct code read and
+  mocked tests if no live local-model smoke test has been run recently. If
+  future work needs to exercise the local path live, install Ollama and
+  pull the configured model first (default `qwen2.5:7b-instruct`).
 
-## 8. Background processes this session left running (safe to kill)
+### 6c. Superseded follow-up items
 
-`mythic serve` (8765), Vite dev (5173), specs static server (8099), ComfyUI (8188). The next session can restart what it needs.
+The following items from an earlier revision of this file are now closed
+and are listed here only to avoid confusion if an old copy resurfaces:
 
----
-
-**Bottom line:** the app is a working, privacy-by-default GraphRAG second brain with a 3D graph, 7 views, 316 Python + 103 frontend tests green, on `feat/3d-graphrag`. Continue at **Phase 7 (agent layer)** using the §4 pattern. The single biggest lesson, reinforced again in P6: **a `/run`'s self-reported verdict — including a `surfaced`/reject stamp on individual stages — can itself be wrong** (this session found both a stage-state plumbing bug in earlier phases AND a `.fable`-directory path-splitting bug in P6 that produced false-negative rejects on stages that had genuinely passed). Passing tests and green builds are necessary but not sufficient either. Always re-derive from disk (git log, real test runs, direct code reads of the artifacts in question) and drive the real UI in Chrome before accepting OR rejecting a phase's outcome.
+- ~~CORS/CSRF on state-changing `/api/*` + upload size cap → security
+  hardening~~ **Done** (Section 3 above).
+- ~~Regenerate `docs/` API docs (P4/P5/P6 drift) → the P10 docs pass~~
+  **Done now**, ahead of any P10 work (this correction pass); it was not
+  deferred to P10 after all.
+- FABLE-HARNESS-specific tooling follow-ups (a `codex-review.ps1`
+  artifact-path-splitting bug, `missability-inspector` false negatives, an
+  untyped same-tier judge dispatch) are specific to the FABLE-HARNESS
+  execution primitives described in Section 6 and are not applicable to the
+  Claude Code Orchestrator harness now in use for this repo. If
+  FABLE-HARNESS is reintroduced for future work, re-verify whether those
+  issues still apply before relying on it.

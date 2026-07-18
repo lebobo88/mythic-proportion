@@ -61,6 +61,29 @@
   cursor: grab;
 }
 
+/* Phase 4b empty-graph state (plan Section 6.4, item 4). */
+.mp-graph-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: var(--space-5);
+  color: var(--color-text-secondary);
+}
+
+.mp-graph-empty-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .mp-graph-reading-pane {
   width: 320px;
   flex-shrink: 0;
@@ -105,4 +128,51 @@
   border-radius: var(--radius-md);
   padding: var(--space-2);
   margin-top: var(--space-2);
+}
+
+/* Phase 4c (plan Section 6.5 item 5): the generative-ramp community badge --
+   glyph icon + swatch-colored fill + text label, shared by the per-mode
+   accessibility tree and the visible per-mode 2D fallback panel below. */
+.mp-community-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mp-community-glyph {
+  flex-shrink: 0;
+}
+
+.mp-community-badge-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* Phase 4c (plan Section 6.5 item 6): the visible, structural (non-canvas)
+   2D fallback for Orbital/Strata/Terrain -- Cloud keeps its own canvas
+   (`.mp-graph-canvas-wrap`/`.mp-graph-canvas`) untouched. */
+.mp-graph-mode-fallback {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--graph-bg);
+}
+
+.mp-graph-mode-fallback-cluster,
+.mp-graph-mode-fallback-level,
+.mp-graph-mode-fallback-region {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.mp-graph-mode-fallback-region-node {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-1) var(--space-2) 0 0;
 }

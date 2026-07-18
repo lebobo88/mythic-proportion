@@ -16,6 +16,7 @@ from mythic_proportion.graph.cache import LlmCache
 from mythic_proportion.graph.communities import (
     build_weighted_edge_list,
     compute_communities,
+    project_node_enrichment,
     run_hierarchical_leiden,
 )
 from mythic_proportion.graph.extract import FakeExtractionClient
@@ -167,6 +168,112 @@ def test_run_hierarchical_leiden_returns_empty_for_no_edges() -> None:
     assignments, backend = run_hierarchical_leiden([], random_seed=1)
     assert assignments == []
     assert backend == "none"
+
+
+# ---------------------------------------------------------------------------
+# GraphStore.communities_full_for_entities
+# ---------------------------------------------------------------------------
+
+
+def test_communities_full_for_entities_returns_every_level_a_given_entity_participates_in() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    b = store.upsert_entity("B", "CONCEPT", "")
+    store.replace_communities(
+        [
+            (0, 3, None, a),
+            (1, 7, 3, a),
+            (0, 3, None, b),
+        ]
+    )
+
+    rows = store.communities_full_for_entities([a, b])
+    a_rows = [r for r in rows if r[3] == a]
+    b_rows = [r for r in rows if r[3] == b]
+    assert sorted(a_rows) == [(0, 3, None, a), (1, 7, 3, a)]
+    assert b_rows == [(0, 3, None, b)]
+
+
+def test_communities_full_for_entities_omits_entities_with_no_stored_row() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    never_clustered = store.upsert_entity("Never", "CONCEPT", "")
+    store.replace_communities([(0, 0, None, a)])
+
+    rows = store.communities_full_for_entities([a, never_clustered])
+    assert {r[3] for r in rows} == {a}
+
+
+def test_communities_full_for_entities_returns_empty_for_no_entity_ids() -> None:
+    conn = _memory_conn()
+    assert GraphStore(conn).communities_full_for_entities([]) == []
+
+
+# ---------------------------------------------------------------------------
+# project_node_enrichment -- Phase 4b `/api/graph` per-node projection
+# ---------------------------------------------------------------------------
+
+
+def test_project_node_enrichment_reports_finest_level_community_and_centrality_object() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    b = store.upsert_entity("B", "CONCEPT", "")
+    store.upsert_relationship(a, b, "related", "", 1.0)
+    store.recompute_degree(a)
+    store.recompute_degree(b)
+    # Two levels for `a`: coarse cluster 3 (level 0) with a finer cluster 9
+    # (level 1) nested under it; `b` only ever appears at level 0.
+    store.replace_communities([(0, 3, None, a), (1, 9, 3, a), (0, 3, None, b)])
+
+    enrichment = project_node_enrichment(conn, [a, b])
+
+    assert enrichment[a]["level"] == 1
+    assert enrichment[a]["community"] == 9
+    assert enrichment[a]["parentCommunity"] == {0: 3}
+    assert set(enrichment[a]["centrality"].keys()) == {"degree", "eigenvector"}
+    assert 0.0 <= enrichment[a]["centrality"]["degree"] <= 1.0
+    assert 0.0 <= enrichment[a]["centrality"]["eigenvector"] <= 1.0
+
+    # `b` only has one stored level -- nothing to chain, so no `parentCommunity` key at all.
+    assert enrichment[b]["level"] == 0
+    assert enrichment[b]["community"] == 3
+    assert "parentCommunity" not in enrichment[b]
+
+
+def test_project_node_enrichment_omits_entities_never_clustered() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    never_clustered = store.upsert_entity("Never", "CONCEPT", "")
+    store.replace_communities([(0, 0, None, a)])
+
+    enrichment = project_node_enrichment(conn, [a, never_clustered])
+    assert set(enrichment.keys()) == {a}
+
+
+def test_project_node_enrichment_returns_empty_dict_when_communities_table_is_entirely_empty() -> None:
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    assert project_node_enrichment(conn, [a]) == {}
+
+
+def test_project_node_enrichment_never_runs_leiden_itself() -> None:
+    """Projection-only invariant (plan Section 3.2/6.4): calling this with a
+    real edge list present but an EMPTY `communities` table must never
+    compute or persist any clustering -- only `compute_communities` may do
+    that."""
+    conn = _memory_conn()
+    store = GraphStore(conn)
+    a = store.upsert_entity("A", "CONCEPT", "")
+    b = store.upsert_entity("B", "CONCEPT", "")
+    store.upsert_relationship(a, b, "related", "", 1.0)
+
+    assert project_node_enrichment(conn, [a, b]) == {}
+    assert conn.execute("SELECT COUNT(*) AS n FROM communities").fetchone()["n"] == 0
 
 
 # ---------------------------------------------------------------------------

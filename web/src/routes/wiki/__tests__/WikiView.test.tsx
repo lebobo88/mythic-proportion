@@ -83,4 +83,49 @@ describe("WikiView", () => {
     expect(await screen.findByText("Backlinks (0)")).toBeInTheDocument();
     expect(screen.getByText("notes/alpha.md")).toBeInTheDocument();
   });
+
+  // Phase 4d (plan Section 6.6 item 4; visual-system spec Section 5.1): the
+  // generalized focus-plus-context-dim treatment, extended from the graph's
+  // Phase 4c per-node motif into 2D list chrome app-wide -- a non-selected
+  // sibling dims once something IS selected, always paired with the
+  // existing non-color `--selected` border/background cue (never dim/color
+  // alone).
+  it("dims non-selected page-list items once a page is selected, alongside the existing non-color selected cue", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        pages: [
+          {
+            path: "notes/alpha.md",
+            title: "Alpha",
+            type: "concept",
+            tags: ["tag-a"],
+            link_count: 0,
+            backlink_count: 0,
+          },
+          {
+            path: "notes/beta.md",
+            title: "Beta",
+            type: "concept",
+            tags: [],
+            link_count: 0,
+            backlink_count: 0,
+          },
+        ],
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => PAGE_DETAIL });
+
+    render(<Harness />);
+    const alphaItem = await screen.findByText("Alpha");
+    const betaItem = await screen.findByText("Beta");
+    expect(alphaItem.closest("button")).not.toHaveClass("mp-context-dimmed");
+    expect(betaItem.closest("button")).not.toHaveClass("mp-context-dimmed");
+
+    await userEvent.click(alphaItem);
+
+    expect(alphaItem.closest("button")).toHaveClass("mp-wiki-page-item--selected");
+    expect(alphaItem.closest("button")).not.toHaveClass("mp-context-dimmed");
+    expect(betaItem.closest("button")).toHaveClass("mp-context-dimmed");
+  });
 });

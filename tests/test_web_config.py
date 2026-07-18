@@ -227,6 +227,93 @@ def test_post_config_updates_local_and_redaction_flags(tmp_path: Path) -> None:
     assert data["has_api_key"] is True
 
 
+# ---------------------------------------------------------------------------
+# Browser-audit item 4 -- local-mode enforcement UX / contradictory copy
+# ---------------------------------------------------------------------------
+#
+# Investigation finding (see the T2 job report): the backend routing itself
+# (`query.engine._default_client`/`_default_extraction_client`) already
+# checked `settings.local` FIRST, unconditionally, before ever looking at
+# `llm_provider` -- so a `local: true` vault was never actually routed to a
+# cloud provider. The audit's "local mode does not appear to be enforced"
+# observation traced to two real UX/display defects instead: (1) `/api/config`
+# reported the raw stored `provider`/`model` fields (e.g. "authhub"/
+# "deepseek-chat") with no way for the client to see that `local: true`
+# overrides those at call time -- so the Ask view's model hint displayed a
+# cloud provider/model even while every actual call was routed to Ollama, and
+# (2) `/api/models` always attempted (and reported failure for) an AuthHub
+# model-list fetch even when the active provider was Ollama/local, producing
+# the observed contradictory copy: "AUTHHUB_API_KEY is not set" right next to
+# "An API key is configured for this provider." Both are fixed here.
+
+
+def test_get_config_exposes_effective_provider_and_model_when_local_overrides_them(
+    tmp_path: Path,
+) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    # Default settings: local=False, provider="authhub", model="deepseek-chat".
+    baseline = client.get("/api/config").json()
+    assert baseline["effective_provider"] == "authhub"
+    assert baseline["effective_model"] == "deepseek-chat"
+
+    response = client.post("/api/config", json={"local": True})
+    assert response.status_code == 200
+    data = response.json()
+    # The raw stored fields are untouched (still "authhub"/"deepseek-chat") --
+    # `local: true` overrides routing without rewriting the provider/model
+    # settings underneath it (so turning `local` back off restores them).
+    assert data["provider"] == "authhub"
+    assert data["model"] == "deepseek-chat"
+    # But the EFFECTIVE (actually-active) provider/model must reflect the
+    # `local: true` override -- this is what the fix adds.
+    assert data["effective_provider"] == "ollama"
+    assert data["effective_model"] == data["ollama_model"]
+
+
+def test_get_config_effective_provider_matches_explicit_ollama_provider_too(tmp_path: Path) -> None:
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.post("/api/config", json={"provider": "ollama"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["effective_provider"] == "ollama"
+    assert data["effective_model"] == data["ollama_model"]
+
+
+def test_get_models_does_not_report_a_missing_authhub_key_when_routed_through_ollama(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Regression for the audit's contradictory-copy finding: with
+    `local: true` (or `provider: "ollama"`), `/api/models` must not claim
+    `AUTHHUB_API_KEY is not set` -- that message is only meaningful when the
+    active provider actually needs an AuthHub key."""
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    client.post("/api/config", json={"local": True})
+    response = client.get("/api/models")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["models"] == []
+    assert "AUTHHUB_API_KEY" not in data.get("error", "")
+
+
+def test_get_models_still_reports_missing_authhub_key_when_actually_on_authhub(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
+    vault = _seed_vault(tmp_path)
+    client = _client(vault)
+
+    response = client.get("/api/models")
+    assert response.status_code == 200
+    assert "AUTHHUB_API_KEY" in response.json()["error"]
+
+
 def test_post_config_updates_ollama_provider_and_model(tmp_path: Path) -> None:
     vault = _seed_vault(tmp_path)
     client = _client(vault)
