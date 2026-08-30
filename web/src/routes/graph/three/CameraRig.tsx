@@ -54,6 +54,21 @@ export interface GraphFitRequest {
    * elevation correction applied).
    */
   extent?: [number, number, number] | null;
+  /**
+   * Escalation remediation round 8, Fix B (DISTANCE-only, mode-scoped --
+   * see `ORBITAL_SETTLE_FIT_PADDING_SCALE` in modeForces.ts for the full
+   * rationale and safety proof): optional scale on the ISOTROPIC
+   * fit-distance computation (`computeFitDistance`) only. Supplied
+   * EXCLUSIVELY by Graph3DScene's WHOLE-GRAPH settle fit while Orbital is
+   * the active mode. Absent/undefined behaves EXACTLY (bit-for-bit; see
+   * cameraFitPaddingByteIdentity.test.ts) as before this field existed --
+   * every selection fit and every other mode's settle fit never supplies
+   * it, and the flat-extent (Terrain) oriented-distance branch never
+   * consults it. This field deliberately does not and must not influence
+   * fit DIRECTION in any way (round 1 of this escalation regressed
+   * axis-avoidance through a direction change and was fully reverted).
+   */
+  paddingScale?: number;
 }
 
 // Browser-audit item 1 (defense-in-depth, alongside the worker-side
@@ -84,12 +99,22 @@ export const FIT_PADDING = 1.35;
  * including the demo-vault-equivalent shape that originally surfaced this
  * remediation job, to guard against this class of regression recurring on
  * the next data change.
+ *
+ * Round-8 addition: the optional `paddingScale` (default 1) multiplies the
+ * effective padding, INSIDE the existing MIN/MAX clamps -- with the default
+ * (or an explicit 1) the result is bit-identical to the pre-round-8 formula
+ * (`x * 1 === x` for every IEEE-754 value this can produce; proven by
+ * Object.is sweeps in cameraFitPaddingByteIdentity.test.ts). Only the
+ * Orbital whole-graph settle fit ever passes a non-1 value.
  */
-export function computeFitDistance(radius: number, fovDeg: number): number {
+export function computeFitDistance(radius: number, fovDeg: number, paddingScale = 1): number {
   const fovRad = (fovDeg * Math.PI) / 180;
   return Math.min(
     MAX_FIT_DISTANCE,
-    Math.max(MIN_FIT_DISTANCE, (Math.max(radius, 1) * FIT_PADDING) / Math.sin(fovRad / 2)),
+    Math.max(
+      MIN_FIT_DISTANCE,
+      (Math.max(radius, 1) * FIT_PADDING * paddingScale) / Math.sin(fovRad / 2),
+    ),
   );
 }
 
@@ -630,10 +655,15 @@ export function CameraRig({ focusTarget, fitRequest }: CameraRigProps) {
     // `computeFitDistance` below stays the default for every other shape
     // (Cloud/Orbital/Strata, and Terrain at small/demo-vault scale), so
     // nothing there regresses.
+    // Round-8 Fix B: the isotropic branch honors the request's optional
+    // mode-scoped `paddingScale` (see the field's doc comment above --
+    // supplied only by the Orbital whole-graph settle fit; `?? 1` keeps
+    // every other request bit-identical). The flat-extent (Terrain) branch
+    // deliberately takes no scale: that protected machinery is untouched.
     const distance =
       fitRequest.extent && isFlatExtent(fitRequest.extent)
         ? computeOrientedFitDistance(fitRequest.extent, resolvedDir, fovDeg, aspect)
-        : computeFitDistance(fitRequest.radius, fovDeg);
+        : computeFitDistance(fitRequest.radius, fovDeg, fitRequest.paddingScale ?? 1);
 
     const toPos = center.clone().addScaledVector(resolvedDir, distance);
     startAnim(toPos, center);

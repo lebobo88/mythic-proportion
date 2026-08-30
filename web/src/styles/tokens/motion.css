@@ -16,6 +16,24 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
   --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+
+  /*
+   * Deep-Field Observatory Phase 4 (plan Section 5.3 "Token alignment" /
+   * Section 5.6 item 5-6): bloom suppression/restore, composed off the
+   * SAME `transitioning` mode-switch signal Graph3DScene.tsx already owns,
+   * plus the safe-tier degradation ladder's bloom-off step (Section 5.3
+   * "Safe-tier choreography" step 1: "bloom off (150ms fade; instant under
+   * reduced motion)" -- read via `readBloomMotionParams` in
+   * lib/graph-colors.ts, same "declared here AND collapsed under
+   * prefers-reduced-motion, like the existing durations" convention as
+   * --duration-fast/base above. Values match --duration-fast/-base exactly
+   * (150ms/225ms) but are named separately per the plan's own Section 5.3
+   * token list, since they carry bloom-specific semantics (asymmetric
+   * suppress-vs-restore duration tied to the mode-transition envelope, not
+   * a generic UI transition).
+   */
+  --graph-motion-bloom-suppress: 150ms;
+  --graph-motion-bloom-restore: 225ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -24,6 +42,8 @@
     --duration-fast: 0ms;
     --duration-base: 0ms;
     --duration-slow: 0ms;
+    --graph-motion-bloom-suppress: 0ms;
+    --graph-motion-bloom-restore: 0ms;
   }
 
   *,

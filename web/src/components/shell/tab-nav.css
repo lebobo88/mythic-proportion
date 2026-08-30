@@ -1,5 +1,14 @@
 .mp-tab-nav ul {
   display: flex;
+  /* T2 closeout fix (Section 5.1, 320px reflow finding 1): without wrap,
+     seven nav items force horizontal page overflow at narrow widths
+     (confirmed by live Playwright evidence: scrollWidth 456-457px vs a
+     320px viewport, "Ingest"/"Lint"/"Settings" cut off past the edge).
+     `flex-wrap: wrap` mirrors this app's existing toolbar-wrap convention
+     (`.mp-graph-toolbar`/`.mp-graph-filters`/`.mp-effects-control` in
+     graph.css) rather than inventing a new pattern -- each `<a>` item just
+     drops to the next line instead of the row ever overflowing the shell. */
+  flex-wrap: wrap;
   list-style: none;
   margin: 0;
   padding: 0;

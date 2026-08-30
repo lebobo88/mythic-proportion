@@ -17,6 +17,55 @@ function makeColors(count: number): GraphColors {
     communityAt: () => swatch,
     hullFill: swatch,
     glow: swatch,
+    // Deep-Field Observatory Phase 2 -- not exercised by this 2D-fallback
+    // test file, but required by the `GraphColors` shape (see
+    // lib/graph-colors.ts's `readNodeMaterialParams`/`readPatternParams`/
+    // `readLabelTierParams` for the real, token-driven defaults these mirror).
+    nodeMaterial: {
+      fresnelPower: 2.5,
+      fresnelIntensity: 0.6,
+      emissiveIdle: 0,
+      emissiveHover: 0.6,
+      emissiveSelected: 1,
+      outlineColor: swatch,
+      outlineWidth: 2,
+    },
+    pattern: { luminanceDelta: 0.18, scale: 3 },
+    labelTier: { communitySize: 15, nodeSize: 12, nodeMinSize: 10, cap: 40, communityMax: 12, outlineWidth: 0.12 },
+    // Deep-Field Observatory Phase 3 -- not exercised by this 2D-fallback
+    // test file, but required by the `GraphColors` shape.
+    edgeWeight: { widthMin: 1, widthMax: 4, opacityMin: 0.25, opacityMax: 0.9 },
+    // Deep-Field Observatory Phase 4 -- not exercised by this 2D-fallback
+    // test file, but required by the `GraphColors` shape (mirrors
+    // lib/graph-colors.ts's `DEFAULT_BLOOM_PARAMS`).
+    bloom: { threshold: 0.9, intensity: 0.6, radius: 0.4, resolutionScale: 0.5 },
+    // Deep-Field Observatory Phase 5 -- not exercised by this 2D-fallback
+    // test file, but required by the `GraphColors` shape (mirrors
+    // lib/graph-colors.ts's per-mode chrome/atmosphere-fog defaults).
+    atmosphereFog: { color: swatch, density: 0.03 },
+    cloudChrome: { nebulaColor: swatch, nebulaOpacity: 0.12 },
+    orbitalChrome: {
+      discColor: swatch,
+      discOpacity: 0.18,
+      ringColor: swatch,
+      ringWidth: 1.5,
+      coreGlowColor: swatch,
+      coreGlowIntensity: 0.8,
+      ringInclinationDeg: 6,
+    },
+    strataChrome: { floorColor: swatch, floorOpacity: 0.14, floorFogDensity: 0.03, bandRimColor: swatch, axisColor: swatch },
+    terrainChrome: {
+      skyTop: swatch,
+      skyHorizon: swatch,
+      hillshadeStrength: 0.8,
+      contourMajorColor: swatch,
+      contourMinorColor: swatch,
+      contourMajorWidth: 1.5,
+      contourMinorWidth: 0.75,
+    },
+    // Deep-Field Observatory Phase 6 -- not exercised by this 2D-fallback
+    // test file, but required by the `GraphColors` shape.
+    environment: { intensity: 1 },
   };
 }
 

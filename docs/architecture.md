@@ -126,7 +126,10 @@ request path.
 The 3D graph frontend (`web/src/routes/graph/`) renders this data through
 four switchable modes (Cloud, Orbital Systems, Strata, Knowledge Terrain)
 sharing one single-draw-call `InstancedMesh2` node layer and a physics
-worker; see `docs/frontend.md` for the full breakdown.
+worker, plus ACES-tone-mapped lighting, selective bloom/vignette
+post-processing (`@react-three/postprocessing`), weight-driven edge
+rendering, and per-mode atmospheric chrome; see `docs/frontend.md` for the
+full breakdown.
 
 ### Layer 6 — privacy layer
 

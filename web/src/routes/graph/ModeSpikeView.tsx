@@ -59,6 +59,57 @@ const FALLBACK_COLORS: GraphColors = {
   communityAt: () => FALLBACK_GRAPH_COLOR,
   hullFill: FALLBACK_GRAPH_COLOR,
   glow: FALLBACK_GRAPH_COLOR,
+  // Deep-Field Observatory Phase 2 -- see GraphView.tsx's identical fallback
+  // comment; this spike page keeps its own decoupled copy by convention.
+  nodeMaterial: {
+    fresnelPower: 2.5,
+    fresnelIntensity: 0.6,
+    emissiveIdle: 0,
+    emissiveHover: 0.6,
+    emissiveSelected: 1,
+    outlineColor: FALLBACK_GRAPH_COLOR,
+    outlineWidth: 2,
+  },
+  pattern: { luminanceDelta: 0.18, scale: 3 },
+  labelTier: { communitySize: 15, nodeSize: 12, nodeMinSize: 10, cap: 40, communityMax: 12, outlineWidth: 0.12 },
+  // Deep-Field Observatory Phase 3 -- see GraphView.tsx's identical fallback
+  // comment; this spike page keeps its own decoupled copy by convention.
+  edgeWeight: { widthMin: 1, widthMax: 4, opacityMin: 0.25, opacityMax: 0.9 },
+  // Deep-Field Observatory Phase 4 -- see GraphView.tsx's identical fallback
+  // comment; this spike page keeps its own decoupled copy by convention.
+  bloom: { threshold: 0.9, intensity: 0.6, radius: 0.4, resolutionScale: 0.5 },
+  // Deep-Field Observatory Phase 5 -- see GraphView.tsx's identical fallback
+  // comment; this spike page keeps its own decoupled copy by convention.
+  atmosphereFog: { color: FALLBACK_GRAPH_COLOR, density: 0.03 },
+  cloudChrome: { nebulaColor: FALLBACK_GRAPH_COLOR, nebulaOpacity: 0.12 },
+  orbitalChrome: {
+    discColor: FALLBACK_GRAPH_COLOR,
+    discOpacity: 0.18,
+    ringColor: FALLBACK_GRAPH_COLOR,
+    ringWidth: 1.5,
+    coreGlowColor: FALLBACK_GRAPH_COLOR,
+    coreGlowIntensity: 0.8,
+    ringInclinationDeg: 6,
+  },
+  strataChrome: {
+    floorColor: FALLBACK_GRAPH_COLOR,
+    floorOpacity: 0.14,
+    floorFogDensity: 0.03,
+    bandRimColor: FALLBACK_GRAPH_COLOR,
+    axisColor: FALLBACK_GRAPH_COLOR,
+  },
+  terrainChrome: {
+    skyTop: FALLBACK_GRAPH_COLOR,
+    skyHorizon: FALLBACK_GRAPH_COLOR,
+    hillshadeStrength: 0.8,
+    contourMajorColor: FALLBACK_GRAPH_COLOR,
+    contourMinorColor: FALLBACK_GRAPH_COLOR,
+    contourMajorWidth: 1.5,
+    contourMinorWidth: 0.75,
+  },
+  // Deep-Field Observatory Phase 6 (Section 3.1 item 6): required by the
+  // `GraphColors` shape; matches DEFAULT_ENVIRONMENT_PARAMS in graph-colors.ts.
+  environment: { intensity: 1 },
 };
 
 export function ModeSpikeView() {

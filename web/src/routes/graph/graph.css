@@ -5,6 +5,49 @@
   height: 70vh;
 }
 
+/* T2 remediation (Section 5.1, 320px reflow finding: live Browser Validator
+   evidence, container-height architecture round). `.mp-graph`'s FIXED
+   `height: 70vh` above forced `.mp-graph-body` (flex: 1; min-height: 0,
+   below) to shrink and absorb the a11y tree's bounded `:focus-within`
+   reveal (`.mp-graph-a11y-tree:focus-within` far below, `max-height:
+   min(300px, 40vh)`) out of ITS OWN flex budget instead of the outer
+   `.mp-graph` container growing to make room -- measured crushing
+   `.mp-graph-canvas-wrap` to 9px at a 320x720 viewport. `:has()` lets
+   `.mp-graph` grow by EXACTLY the reveal's own bound the instant a
+   descendant of the tree holds focus, so `.mp-graph-body` keeps its full
+   70vh budget in BOTH states -- the canvas/reading-pane never has to give
+   up space to the tree. This also removes the root cause of the second
+   live finding (the revealed tree visually overlapping an open reading
+   pane): that overlap traced back to `.mp-graph-body` being squeezed below
+   what the reading pane's own narrow-width `max-height: 50vh` (below)
+   needed, so the pane's content overflowed past its shrunk parent into the
+   tree's box. With `.mp-graph-body` no longer squeezed, the pane fits
+   inside its own parent again. (GraphView.tsx additionally moves focus off
+   the tree onto the reading pane on tree-driven selection, which drops
+   `:focus-within` entirely and is the primary fix for the overlap case;
+   this rule is the independent, correct guarantee for every other moment a
+   descendant of the tree holds focus, e.g. a screen-reader user still
+   arrowing through tree rows before selecting one.)
+
+   The `min(300px, 40vh)` term here is intentionally the SAME literal
+   expression as `.mp-graph-a11y-tree:focus-within`'s own `max-height` far
+   below, duplicated rather than extracted into a shared custom property --
+   that rule is already Verifier-confirmed correct and this fix must not
+   touch its value or its own passing structural test
+   (`graphA11yTreeVisualHidden.structural.test.ts`) in any way. Keep the two
+   expressions in sync if the reveal's own bound ever changes. */
+.mp-graph:has(.mp-graph-a11y-tree:focus-within) {
+  /* T2 remediation (Verifier J-1-HEIGHT-MATH, follow-up cycle): the reveal
+     above transitions the tree from `position: absolute` (out of flow,
+     contributes nothing to `.mp-graph`'s flex layout) to `position: static`
+     (a real flex participant), which makes the parent's own
+     `gap: var(--space-2)` (top of file) newly apply between the tree and its
+     sibling `.mp-graph-body`. The growth calc must add that gap on top of
+     the reveal's own bounded height, or `.mp-graph-body` loses exactly
+     `--space-2` of its flex budget the instant the tree reveals. */
+  height: calc(70vh + min(300px, 40vh) + var(--space-2));
+}
+
 .mp-graph-hint {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
@@ -39,6 +82,37 @@
   border-color: var(--color-accent);
 }
 
+/* Deep-Field Observatory Phase 4 (plan Section 5.1 IA / Section 5.2
+   "Layout and density": "the toolbar gains the effects control from the
+   `.mp-graph-filter` family via `--effects-control-*` tokens (segmented,
+   keyboard-operable, active state = border plus background plus
+   `aria-pressed`)"). Same segmented-control shape as `.mp-graph-filter`
+   above, consuming the dedicated `--effects-control-*` component tokens
+   (declared by Phase 1 in components.css, confirmed present) rather than
+   reusing `--color-accent`/`--color-border` directly, so this control's
+   visual language is independently themeable from the mode/type filters. */
+.mp-effects-control {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.mp-effects-control-item {
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--effects-control-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--effects-control-fg);
+  cursor: pointer;
+}
+
+.mp-effects-control-item--active {
+  background: var(--effects-control-bg-active);
+  color: var(--effects-control-fg-active);
+  border-color: var(--effects-control-border-active);
+}
+
 .mp-graph-body {
   flex: 1;
   display: flex;
@@ -48,10 +122,28 @@
 
 .mp-graph-canvas-wrap {
   flex: 1;
+  /* T2 remediation (Section 5.1, 320px reflow finding, container-height
+     architecture round): a defense-in-depth floor -- complementary to (not
+     a substitute for) the `.mp-graph:has(...)` growth rule above, which is
+     the primary fix. Even if some OTHER sibling ever squeezes
+     `.mp-graph-body`'s available space (a future addition, an environment
+     without `:has()` support, an unusually short viewport, etc.), this
+     flex item can never be crushed all the way toward the ~9px the live
+     finding measured -- a real, if visually tight, canvas stays clickable
+     and legible rather than effectively invisible. */
+  min-height: 160px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--graph-bg);
+  /* Deep-Field Observatory Phase 5 (plan Section 3.1 item 5 / Section 8.3
+     "2D-fallback: each mode's 2D fallback view gets a corresponding
+     lightweight visual cue for its chrome"). Cloud's canvas fallback
+     (`Graph2DFallback.tsx`) is the ONLY caller that ever mounts this class
+     (see GraphView.tsx's mode switch), so a plain, unconditional nebula-haze
+     wash here is safe -- never needs a `[data-mode]` guard. Decorative only,
+     token-driven (never hardcoded hex, Section 5.6 item 7); the canvas's own
+     force-directed rendering above it remains the real identity carrier. */
+  background: radial-gradient(ellipse at 50% 35%, var(--graph-cloud-nebula-color) 0%, var(--graph-bg) 70%);
 }
 
 .mp-graph-canvas-wrap canvas {
@@ -87,10 +179,88 @@
 .mp-graph-reading-pane {
   width: 320px;
   flex-shrink: 0;
+  /* T2 remediation (Section 5.1, 320px reflow finding, container-height
+     architecture round): same defense-in-depth floor as
+     `.mp-graph-canvas-wrap` above, and for the same reason -- this rule
+     applies both to the fixed-320px desktop/tablet layout and (since it is
+     never overridden below) the narrow-viewport stacked layout, so the
+     pane's title/badge/close button stay legible even in a worst-case
+     squeeze instead of collapsing toward zero. */
+  min-height: 160px;
   overflow-y: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
+}
+
+/* T2 closeout fix (Section 5.1, 320px reflow finding 3): a fixed,
+   non-shrinking 320px-wide aside can never fit next to any nonzero-width
+   canvas inside a 320px (or ~375px) viewport without forcing horizontal
+   page overflow -- independent of the a11y-tree defect fixed above. The
+   plan's own Section 5.1 "Responsive behavior" text calls for "~375px:
+   single column ... reading pane becomes a dismissible app-owned bottom
+   sheet"; this is the minimal CSS-only version of that (the pane's close
+   button already makes it dismissible; no new component is introduced) --
+   below the ~834px tablet breakpoint, `.mp-graph-body` stacks into a
+   column and the reading pane takes the full available width instead of a
+   fixed 320px, bounded to a max-height so it still reads as a sheet rather
+   than a full-viewport takeover. The desktop/tablet fixed-320px layout
+   above is unchanged outside this query. */
+@media (max-width: 600px) {
+  .mp-graph-body {
+    flex-direction: column;
+  }
+
+  .mp-graph-reading-pane {
+    width: 100%;
+    max-height: 50vh;
+  }
+}
+
+/* Deselection (plan Section 5.1 J-FOCUS "clear"): the reading pane's
+   app-owned close button -- floated to the pane's top-right corner, ahead
+   of the <h3> in DOM order so it's also first in the pane's tab order. */
+.mp-graph-reading-pane-close {
+  float: right;
+  margin-left: var(--space-2);
+  cursor: pointer;
+}
+
+/* Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 / Section 5.1
+   J5-EDGE-WEIGHT / Section 5.2 "Layout and density": "the reading pane
+   ... gains Connections rows (Inter title, right-aligned mono weight)").
+   Tokens declared in Phase 1 (styles/tokens/components.css). */
+.mp-connections-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.mp-connections-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--connections-row-border);
+}
+
+.mp-connections-neighbor {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.mp-connections-weight {
+  font-family: var(--connections-weight-font);
+  color: var(--connections-weight-fg);
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* Visually hidden but keyboard/AT reachable -- the standard "sr-only"
@@ -108,26 +278,77 @@
   border: 0;
 }
 
+/* T2 closeout fix (Section 5.1, 320px reflow finding 2): the plan's own
+   Assumptions text asserted this tree is "visually-hidden-but-focusable
+   per its own header comment (CSS to confirm)" -- live Playwright
+   inspection at 320px proved that assumption wrong against the ORIGINAL
+   `:focus-within` rule (which flipped `position` back to `static` with
+   `width`/`height: auto` the moment ANY descendant received focus, putting
+   the full ~1,500-item tree into normal document flow at its full
+   intrinsic height (~34,500px) and, at narrow widths, visually crushing the
+   reading pane (`.mp-graph-reading-pane`) into an unusable sliver).
+   `.mp-graph-a11y-tree` stays on the standard sr-only clip-rect/
+   absolute-positioning technique (same technique as `.mp-visually-hidden`
+   above -- not `display:none`/`visibility:hidden`, which would remove it
+   from the tab order and break focusability) at every state EXCEPT while a
+   descendant actually holds focus -- see the bounded `:focus-within` reveal
+   immediately below, which restores a genuinely visible focus location
+   (WCAG 2.4.7) without reintroducing the unbounded-height regression. Only
+   this VISUAL presentation changed -- the tree's DOM structure/content/ARIA
+   semantics are untouched. */
 .mp-graph-a11y-tree {
   position: absolute;
   width: 1px;
   height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+  border: 0;
 }
 
+/* T2 remediation (Section 5.1, 320px reflow finding 2, round 2 -- Verifier
+   confirmed the permanently-sr-only fix above is a real WCAG 2.4.7 (Focus
+   Visible) regression): this tree is the ONLY keyboard path to select an
+   individual graph node in the default 3D mode (and Cloud's 2D fallback),
+   so a sighted keyboard-only user tabbing through up to ~1,500 controls got
+   zero visible page change for the whole traversal -- the permanent
+   `clip: rect(0,0,0,0)` above zeroes the paint region for every descendant,
+   including the global `:focus-visible` outline (`base.css`).
+   This rule reveals the tree the moment focus enters it, but BOUNDED --
+   unlike the original broken `:focus-within` rule, it never grows to the
+   tree's unbounded ~34,500px intrinsic content height. `max-height` is
+   capped to whichever is smaller of a fixed 300px or 40% of the viewport
+   height (`min(300px, 40vh)`): a fixed ceiling so it's never unreasonably
+   tall on a large viewport, AND a viewport-relative ceiling so it's always
+   a genuinely small fraction of a very short one (a phone in landscape,
+   etc.) -- together this can never crush `.mp-graph-canvas-wrap`/
+   `.mp-graph-reading-pane` toward zero at ANY viewport height, including at
+   320px. `overflow-y: auto` lets the remaining content scroll INSIDE the
+   box instead of expanding it. `width: auto` (never a fixed/viewport-width
+   value) keeps the tree a normal flex item of `.mp-graph` (column
+   direction, default `align-items: stretch`), so its width is bounded by
+   the same container that already bounds every other row -- it cannot
+   force horizontal overflow at 320px either; `overflow-x: hidden` is a
+   second, independent guard against the links `<table>`'s non-wrapping
+   cells pushing the box wider than that. `white-space: normal` lets node
+   labels wrap instead of forcing width growth. When focus leaves the tree
+   entirely, `:focus-within` no longer applies and the base rule above
+   (unchanged) takes back over -- fully sr-only again. */
 .mp-graph-a11y-tree:focus-within {
   position: static;
   width: auto;
   height: auto;
-  overflow: auto;
+  max-height: min(300px, 40vh);
+  padding: var(--space-2);
+  margin: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   clip: auto;
   white-space: normal;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-2);
-  margin-top: var(--space-2);
 }
 
 /* Phase 4c (plan Section 6.5 item 5): the generative-ramp community badge --
@@ -175,4 +396,41 @@
   align-items: center;
   gap: var(--space-1);
   margin: var(--space-1) var(--space-2) 0 0;
+}
+
+/* Deep-Field Observatory Phase 5 (plan Section 3.1 item 5 / Section 8.3
+   "2D-fallback ... lightweight visual cue for its chrome"). One rule per
+   mode, keyed off the SAME `data-mode` attribute `Graph2DModeFallback.tsx`
+   already sets on `.mp-graph-mode-fallback` -- decorative background washes
+   only, token-driven (never hardcoded hex, Section 5.6 item 7); the
+   structural DOM content (clusters/dendrogram/region list) above remains
+   the REAL, non-color identity carrier per mode (Gate B item 5 does not
+   depend on this layer). */
+.mp-graph-mode-fallback[data-mode="orbital"] {
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 0 28%,
+      var(--graph-orbital-ring-color) 28% 29%,
+      transparent 29% 50%,
+      var(--graph-orbital-ring-color) 50% 51%,
+      transparent 51%
+    ),
+    var(--graph-bg);
+}
+
+.mp-graph-mode-fallback[data-mode="strata"] {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      var(--graph-strata-floor-color) 0,
+      var(--graph-strata-floor-color) 2px,
+      transparent 2px,
+      transparent 56px
+    ),
+    var(--graph-bg);
+}
+
+.mp-graph-mode-fallback[data-mode="terrain"] {
+  background: linear-gradient(to bottom, var(--graph-terrain-sky-top) 0%, var(--graph-terrain-sky-horizon) 100%);
 }

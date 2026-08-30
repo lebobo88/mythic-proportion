@@ -34,6 +34,7 @@ import {
   orbitalRadiusForNode,
   strataLayerY,
   linkDistanceForMode,
+  ORBITAL_RADIAL_STRENGTH,
   TERRAIN_FLATTEN_STRENGTH,
   SHARED_CHARGE_STRENGTH,
   SHARED_CHARGE_DISTANCE_MAX,
@@ -202,7 +203,10 @@ function buildSimulation(
   // shared across all four modes.
   if (mode === "orbital") {
     // Concentric shells by community, radiating in all 3 dimensions --
-    // replaces the plain origin-containment forces entirely.
+    // replaces the plain origin-containment forces entirely. Strength is
+    // the round-8 Fix A tuning (see ORBITAL_RADIAL_STRENGTH's doc comment
+    // in modeForces.ts): the spike-era 0.25 left settled nodes ~17% outside
+    // their shell targets against the shared charge repulsion.
     simulation.force(
       "radial",
       forceRadial(
@@ -210,7 +214,7 @@ function buildSimulation(
         0,
         0,
         0,
-      ).strength(0.25),
+      ).strength(ORBITAL_RADIAL_STRENGTH),
     );
   } else if (mode === "strata") {
     // Strong y-layering by hierarchy level; x/z keep a gentle origin pull

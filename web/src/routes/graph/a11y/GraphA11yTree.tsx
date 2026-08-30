@@ -18,6 +18,7 @@
 import { useMemo } from "react";
 import type { VizEdge, VizNode } from "../types";
 import type { GraphColors } from "../../../lib/graph-colors";
+import { formatEdgeWeight } from "../edgeWeight";
 import { neighborsOf } from "../graphMath";
 import { groupByCommunity, groupByStrataHierarchy, groupByTerrainRegion, TERRAIN_TIER_LABELS } from "../graphModeViews";
 import { CommunityBadge, CommunityGlyphIcon } from "../CommunityBadge";
@@ -125,6 +126,13 @@ function StandardA11yTree({
           <tr>
             <th scope="col">Source</th>
             <th scope="col">Target</th>
+            {/* Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 /
+                Section 5.1 J5-EDGE-WEIGHT: "The a11y links table gains a
+                text Weight column"). `formatEdgeWeight` is the SAME shared
+                helper the reading-pane Connections list uses (GraphView.tsx)
+                -- the literal "weight: n/a" fallback for an edge with no
+                served weight, never a fabricated numeric value. */}
+            <th scope="col">Weight</th>
           </tr>
         </thead>
         <tbody>
@@ -134,6 +142,7 @@ function StandardA11yTree({
               <tr key={`${edge.source}-${edge.target}-${i}`}>
                 <td>{labelById.get(edge.source) ?? edge.source}</td>
                 <td>{labelById.get(edge.target) ?? edge.target}</td>
+                <td>{formatEdgeWeight(edge.weight)}</td>
               </tr>
             ))}
         </tbody>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeCommunities, computeDegrees, deriveVizGraph, neighborsOf, sizeForDegree } from "../graphMath";
+import { computeCommunities, computeDegrees, connectionsOf, deriveVizGraph, neighborsOf, sizeForDegree } from "../graphMath";
 import type { GraphData } from "../../../lib/api";
 
 const sample: GraphData = {
@@ -199,5 +199,47 @@ describe("neighborsOf", () => {
   it("returns the 1-hop neighbor set regardless of edge direction", () => {
     expect(Array.from(neighborsOf(sample, "b")).sort()).toEqual(["a", "c"]);
     expect(Array.from(neighborsOf(sample, "d"))).toEqual([]);
+  });
+});
+
+// Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 / Section 5.1
+// J5-EDGE-WEIGHT): the shared source for the reading-pane Connections list
+// and the a11y links table's Weight column.
+describe("connectionsOf", () => {
+  const weighted: GraphData = {
+    nodes: [
+      { id: "a", label: "A", type: "concept" },
+      { id: "b", label: "B", type: "concept" },
+      { id: "c", label: "C", type: "concept" },
+    ],
+    edges: [
+      { source: "a", target: "b", weight: 7, type: "related" },
+      { source: "c", target: "a", weight: undefined },
+    ],
+  };
+
+  it("returns each edge touching nodeId as {neighborId, weight, type}, regardless of source/target direction", () => {
+    const connections = connectionsOf(weighted, "a");
+    expect(connections).toHaveLength(2);
+    expect(connections).toContainEqual({ neighborId: "b", weight: 7, type: "related" });
+    expect(connections).toContainEqual({ neighborId: "c", weight: undefined, type: undefined });
+  });
+
+  it("returns an empty array for a node with no edges", () => {
+    expect(connectionsOf(weighted, "nonexistent")).toEqual([]);
+  });
+
+  it("never de-duplicates -- two distinct edges to the same neighbor surface as two rows", () => {
+    const multigraph: GraphData = {
+      nodes: [
+        { id: "a", label: "A", type: "concept" },
+        { id: "b", label: "B", type: "concept" },
+      ],
+      edges: [
+        { source: "a", target: "b", weight: 2, type: "cites" },
+        { source: "a", target: "b", weight: 9, type: "responds-to" },
+      ],
+    };
+    expect(connectionsOf(multigraph, "a")).toHaveLength(2);
   });
 });

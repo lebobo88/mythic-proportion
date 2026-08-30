@@ -26,6 +26,31 @@ export interface ElevationPoint {
   weight: number;
 }
 
+/**
+ * Content equality for two elevation-point arrays (T2 escalation, Terrain
+ * context-loss job, secondary rebuild-churn guard): Graph3DScene's 800ms
+ * terrain feed uses this in a functional-setState bail-out
+ * (`setTerrainPoints((prev) => equal ? prev : next)`) so a SETTLED layout
+ * -- whose freshly built array is content-identical to the previous one --
+ * keeps the previous array reference, never invalidates TerrainSurface's
+ * grid/geometry memos, and therefore stops the pointless
+ * rebuild-and-dispose cycle entirely. Mirrors the content-comparison
+ * discipline the worker re-init fix established in `useForceLayoutWorker`
+ * (reference-fresh but content-identical inputs must be no-ops). Exact
+ * float comparison is deliberate: while physics is still moving, positions
+ * differ every tick and the rebuild proceeds unchanged.
+ */
+export function elevationPointsEqual(a: ElevationPoint[], b: ElevationPoint[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const pa = a[i];
+    const pb = b[i];
+    if (pa.x !== pb.x || pa.z !== pb.z || pa.weight !== pb.weight) return false;
+  }
+  return true;
+}
+
 export interface ElevationGrid {
   size: number;
   minX: number;

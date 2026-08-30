@@ -7,6 +7,7 @@ import {
   blendPositions,
   isTransitionActive,
   MODE_TRANSITION_DURATION_MS,
+  resolveChromeCrossfadeAlpha,
   startModeTransition,
   transitionAlpha,
 } from "../three/modeTransition";
@@ -118,5 +119,24 @@ describe("blendPositions", () => {
     const out = new Float32Array(6);
     blendPositions(state, ids, to, 0, out);
     expect(Array.from(out)).toEqual([0, 0, 0, 10, 10, 10]);
+  });
+});
+
+// Deep-Field Observatory Phase 5 (plan Section 5.3 "Mode-transition
+// cross-fade": "chrome/fog begin an 800ms easeOutCubic cross-fade ... riding
+// the SAME `transitioning` flag" Phase 4 already wired bloom suppression to
+// -- NOT a new/second fade-timing system). `resolveChromeCrossfadeAlpha` is
+// the single null-safe entry point every chrome-fade call site uses instead
+// of re-deriving "no transition in flight means fully resolved" logic
+// independently at each call site.
+describe("resolveChromeCrossfadeAlpha", () => {
+  it("resolves to 1 (fully resolved, no blend) when there is no in-flight transition", () => {
+    expect(resolveChromeCrossfadeAlpha(null, 1234)).toBe(1);
+  });
+
+  it("mirrors transitionAlpha's eased progress while a transition is in flight", () => {
+    const state = startModeTransition(["a"], new Float32Array([0, 0, 0]), 0, 800);
+    expect(resolveChromeCrossfadeAlpha(state, 400)).toBe(transitionAlpha(state, 400));
+    expect(resolveChromeCrossfadeAlpha(state, 800)).toBe(1);
   });
 });
