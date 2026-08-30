@@ -25,9 +25,19 @@ htmlcov/
 # Secrets
 .env
 .env.*
+# ...but the key-less template IS committed (see scripts/_lib.ps1 Import-DotEnv).
+!.env.example
 *.key
 
+# Vaults are personal content and never belong in the repo. The globs at the
+# top of this file cover a vault's drop/raw/.index/.vault-meta subtrees, but
+# NOT wiki/ -- and a compiled vault's wiki/ holds pages generated from your
+# own source documents. Ignore the whole trees.
+my-vault/
+repro-vault/
+
 # Local dev scratch trees
+dev-vault/
 tmpvault/
 tmpvault2/
 playground/
@@ -39,6 +49,17 @@ web/*.tsbuildinfo
 # Vite build output mounted at /app by web/app.py -- reproducible via
 # `cd web && npm run build`; not committed (same policy as legacy web/dist/).
 src/mythic_proportion/web/static_next/
+
+# Dev server logs (generated on every run, not part of source)
+web/dev_stdout*.log
+web/dev_stderr*.log
+web/dev-server.log
+web/*temp.log
+web/dev_backend.log
+web/dev_backend.log.err
+web/dev_run.log
+serve_stdout.log
+serve_stderr.log
 
 # Fable harness per-run state (not part of this repo)
 .fable/

@@ -339,8 +339,23 @@ describe("computeBoundingSphere (Graph3DScene.tsx) now also returns the per-axis
 
 describe("Graph3DScene wires the bounding-volume extent into every fit request (structural -- confirms the exported pure functions above are actually connected, not merely defined)", () => {
   it("the whole-graph settle fit (onEnd, nothing selected) passes extent: fit.extent into setFitRequest", async () => {
+    // Round-8/round-9 note (the ONLY change this protected test has ever
+    // taken, and the intent is strengthened, not loosened): the settle-fit
+    // request now also carries the orbital-only `paddingScale` field
+    // (distance-only, whole-graph-only -- see
+    // cameraFitPaddingByteIdentity.test.ts for the full byte-identity proof
+    // for every other path), decided since round 9 by the shape-ADAPTIVE
+    // `orbitalSettleFitPaddingScale(fit.radius, fit.maxNodeDistance)` gate
+    // instead of a blanket constant (a blanket scale provably clipped
+    // small/sparse Orbital datasets). This regex still pins
+    // center/radius/nonce/extent as the truthful, unscaled bounding-sphere
+    // values, and ALSO pins that the one extra field is exactly the
+    // orbital-conditional adaptive decision -- any other addition or a
+    // pre-scaled radius/extent fails it.
     const source = readFileSync(join(__dirname, "..", "three", "Graph3DScene.tsx"), "utf-8");
-    expect(source).toMatch(/setFitRequest\(\{\s*center: fit\.center,\s*radius: fit\.radius,\s*nonce: fitNonceRef\.current,\s*extent: fit\.extent\s*\}\);/);
+    expect(source).toMatch(
+      /setFitRequest\(\{\s*center: fit\.center,\s*radius: fit\.radius,\s*nonce: fitNonceRef\.current,\s*extent: fit\.extent,\s*paddingScale:\s*mode === "orbital"\s*\?\s*orbitalSettleFitPaddingScale\(fit\.radius, fit\.maxNodeDistance\)\s*:\s*undefined,?\s*\}\);/,
+    );
   });
 
   it("CameraRig.tsx's fit-application effect resolves the extent via resolveFlatShapeElevation, applied on top of the axis-resolved direction", async () => {
@@ -417,7 +432,12 @@ describe("Terrain mode's settled bounding volume is genuinely flat at ~1,500-nod
     // `resolveFlatShapeElevation` uses to decide whether a correction is
     // needed at all.
     expect(aspect).toBeLessThan(0.3);
-  }, 20000);
+    // Round-8 timeout-only bump (no assertion/behavior change): the 500-tick
+    // N=1500 settle exceeds the old 20s allowance when the full 72-file
+    // suite saturates an already-loaded CPU -- measured timing out under
+    // full-suite parallel load while passing every focused run, both before
+    // and after round-8's changes.
+  }, 120000);
 });
 
 // T2 remediation, second/final bounded attempt: the residual defect that
@@ -560,9 +580,14 @@ describe("computeOrientedFitDistance (CameraRig.tsx) -- direction-aware replacem
 
 describe("CameraRig.tsx wires the direction-aware fit distance into the fit-to-graph effect, gated to flat shapes only (structural -- confirms the exported pure functions above are actually connected, not merely defined)", () => {
   it("computes distance from computeOrientedFitDistance for a flat extent, and from the existing isotropic computeFitDistance otherwise -- so Cloud/Orbital/Strata and small-scale Terrain keep their already-confirmed-working framing untouched", () => {
+    // Round-8 note (strengthened alongside the settle-fit regex above, same
+    // discipline): the isotropic branch now honors the request's optional
+    // mode-scoped `paddingScale` via `?? 1` -- bit-identical when the field
+    // is absent (see cameraFitPaddingByteIdentity.test.ts) -- while the
+    // oriented (flat/Terrain) branch is pinned to take NO scale argument.
     const source = readFileSync(join(__dirname, "..", "three", "CameraRig.tsx"), "utf-8");
     expect(source).toMatch(
-      /fitRequest\.extent\s*&&\s*isFlatExtent\(fitRequest\.extent\)\s*\?\s*computeOrientedFitDistance\(\s*fitRequest\.extent,\s*resolvedDir,\s*fovDeg,\s*aspect,?\s*\)\s*:\s*computeFitDistance\(fitRequest\.radius,\s*fovDeg\)/,
+      /fitRequest\.extent\s*&&\s*isFlatExtent\(fitRequest\.extent\)\s*\?\s*computeOrientedFitDistance\(\s*fitRequest\.extent,\s*resolvedDir,\s*fovDeg,\s*aspect,?\s*\)\s*:\s*computeFitDistance\(fitRequest\.radius,\s*fovDeg,\s*fitRequest\.paddingScale \?\? 1\)/,
     );
   });
 
@@ -653,5 +678,6 @@ describe("N=1500 terrain-mode settle, full fit pipeline (production-shape end-to
     expect(resolvedDir.y).toBeGreaterThan(0);
     const toPos = center.clone().addScaledVector(resolvedDir, newDistance);
     expect(toPos.y).toBeGreaterThan(center.y + fit!.extent[1] / 2);
-  }, 20000);
+    // Round-8 timeout-only bump -- same note as the settle test above.
+  }, 120000);
 });

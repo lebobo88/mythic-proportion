@@ -8,11 +8,13 @@
 // just asserted structurally.
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { RepeatWrapping } from "three";
 import {
   disposeObject3D,
   loadOptional,
   useOptionalEquirectTexture,
   useOptionalGLTF,
+  useOptionalNormalTexture,
   useOptionalTexture,
   type MinimalLoader,
 } from "../three/terrainAssetLoading";
@@ -118,6 +120,47 @@ describe("useOptionalEquirectTexture", () => {
     const loader = fakeLoader("fail");
     const { result } = renderHook(() => useOptionalEquirectTexture("terrain/skybox-dusk.png", loader as never));
     await waitFor(() => expect(result.current.status).toBe("error"));
+  });
+});
+
+describe("useOptionalNormalTexture", () => {
+  it("resolves error status (not a throw) for a missing normal map file", async () => {
+    const loader = fakeLoader("fail");
+    const { result } = renderHook(() =>
+      useOptionalNormalTexture("terrain/terrain-detail-normal.png", loader as never),
+    );
+    await waitFor(() => expect(result.current.status).toBe("error"));
+  });
+
+  it("applies NoColorSpace (never sRGB) plus repeat-wrapped tiling on load -- a normal map is linear data, and this asset repeats to add fine relief detail over the whole ground mesh", async () => {
+    const texture = {
+      colorSpace: "srgb",
+      wrapS: 0,
+      wrapT: 0,
+      repeat: { set: vi.fn() },
+      dispose: vi.fn(),
+    } as unknown as { colorSpace: string; wrapS: number; wrapT: number; repeat: { set: (x: number, y: number) => void }; dispose: () => void };
+    const loader = fakeLoader("succeed", texture);
+    const { result } = renderHook(() =>
+      useOptionalNormalTexture("terrain/terrain-detail-normal.png", loader as never),
+    );
+    await waitFor(() => expect(result.current.status).toBe("loaded"));
+    expect(texture.colorSpace).toBe("");
+    expect(texture.wrapS).toBe(RepeatWrapping);
+    expect(texture.wrapT).toBe(RepeatWrapping);
+    expect(texture.repeat.set).toHaveBeenCalledWith(expect.any(Number), expect.any(Number));
+  });
+
+  it("disposes the GPU texture on unmount, matching the other optional-texture loaders' convention", async () => {
+    const dispose = vi.fn();
+    const texture = { colorSpace: "srgb", wrapS: 0, wrapT: 0, repeat: { set: vi.fn() }, dispose };
+    const loader = fakeLoader("succeed", texture);
+    const { result, unmount } = renderHook(() =>
+      useOptionalNormalTexture("terrain/terrain-detail-normal.png", loader as never),
+    );
+    await waitFor(() => expect(result.current.status).toBe("loaded"));
+    unmount();
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });
 

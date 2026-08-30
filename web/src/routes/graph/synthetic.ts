@@ -90,7 +90,7 @@ export function generateSyntheticGraph(options: SyntheticGraphOptions): GraphDat
 
   const targetEdgeCount = Math.round((nodeCount * avgDegree) / 2);
   const seen = new Set<string>();
-  const edges: { source: string; target: string }[] = [];
+  const edges: { source: string; target: string; weight?: number }[] = [];
 
   let attempts = 0;
   const maxAttempts = targetEdgeCount * 8 + 1000;
@@ -109,7 +109,19 @@ export function generateSyntheticGraph(options: SyntheticGraphOptions): GraphDat
     const key = a < b ? `${a}:${b}` : `${b}:${a}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    edges.push({ source: `synthetic:${a}`, target: `synthetic:${b}` });
+    // DEV-ONLY test-fixture extension (Deep-Field Observatory Phase 3, plan
+    // Section 3.1 item 3 / Section 10 `browser_ui_validation`: "prefer a
+    // fixture with varied edge weights ... for testability"), not
+    // production behavior -- production `edge.weight` is served by
+    // `mythic index-graph`'s real GraphRAG extraction (see
+    // `edgeWeight.ts`'s header for the `<STRENGTH 1-10>` convention this
+    // mirrors). ~85% of synthetic edges carry a weight in that same [1, 10]
+    // domain; the remaining ~15% deliberately carry NO weight at all
+    // (`undefined`, never a fabricated 0 or similar), so the client's
+    // "weight: n/a" fallback path (J5-EDGE-WEIGHT) is exercisable via
+    // `?syntheticGraph=N` without a live backend.
+    const weight = rand() < 0.85 ? 1 + rand() * 9 : undefined;
+    edges.push({ source: `synthetic:${a}`, target: `synthetic:${b}`, weight });
   }
 
   // Degree-normalized centrality (0..1) -- the spike's labeled default

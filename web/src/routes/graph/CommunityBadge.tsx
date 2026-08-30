@@ -15,7 +15,13 @@ import {
   type CommunityPatternKind,
 } from "../../lib/communityGlyphs";
 
-const PATTERN_DASH: Record<CommunityPatternKind, string | undefined> = {
+// Exported (Deep-Field Observatory Phase 2, plan Section 5.9 Decision A) so
+// the in-canvas centroid-badge chrome layer (`three/CommunityCentroidBadges.tsx`)
+// can rasterize the EXACT SAME dash rhythm as this DOM glyph -- one source
+// for the outline-pattern non-color cue, never a second hand-tuned copy that
+// could silently drift from this one (Section 5.1 Accessibility: "community
+// identity via glyph SHAPE plus outline PATTERN plus the text").
+export const PATTERN_DASH: Record<CommunityPatternKind, string | undefined> = {
   solid: undefined,
   dots: "1.4,2.2",
   stripes: "3.5,2",

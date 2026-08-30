@@ -973,10 +973,14 @@ def test_api_index_graph_end_to_end_populates_entities(tmp_path: Path, monkeypat
 def test_api_upload_with_no_provider_configured_reports_error_and_does_not_500(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """No AUTHHUB_API_KEY/ANTHROPIC_API_KEY configured -- upload returns a
-    job id immediately; once the background worker drains, the source has
-    still ingested, but the required compile step fails cleanly: `compiled`
-    stays 0 and the failure lands in `errors` (per-source), not a 500."""
+    """No AUTHHUB_API_KEY/ANTHROPIC_API_KEY configured -- upload still returns
+    a job id immediately, but the worker's preflight refuses to ingest at all
+    and reports why, without a 500.
+
+    Regression test for the stranded-vault trap: ingesting first would record
+    the file in the dedup ledger, then fail to compile, leaving a source with
+    no page that a later re-drop reports as a duplicate. The upload stays in
+    `drop/` instead, still retryable once a credential exists."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
 
@@ -994,12 +998,13 @@ def test_api_upload_with_no_provider_configured_reports_error_and_does_not_500(
     assert "job_id" in upload_data
 
     data = _wait_for_job(client, upload_data["job_id"])
-    assert data["ingested"] == 1
+    assert data["ingested"] == 0
     assert data["compiled"] == 0
     assert len(data["errors"]) == 1
     assert "AUTHHUB_API_KEY" in data["errors"][0]["message"]
-    error_file = next(f for f in data["files"] if f["name"] == "note.md")
-    assert error_file["status"] == "error"
+    # Nothing was consumed: the file is still in drop/, awaiting a credential.
+    assert (vault / "drop" / "note.md").is_file()
+    assert not (vault / ".vault-meta" / "ingested.json").is_file()
 
     # No page was created for the uploaded source -- no more silent stub.
     pages_response = client.get("/api/pages")
@@ -1008,15 +1013,18 @@ def test_api_upload_with_no_provider_configured_reports_error_and_does_not_500(
 
 
 def test_api_upload_with_fake_compile_client_succeeds(tmp_path: Path, monkeypatch) -> None:
-    """The success path: `mythic_proportion.web.jobs.compile_source` (the
-    background worker's copy of the reference, per `web.jobs`'s ownership of
-    ingest execution) is monkeypatched to a stand-in that behaves like an
-    injected `FakeCompileClient` would, proving `/api/upload` -> the worker
-    counts a successful compile and creates a page for it."""
+    """The success path: `compile.pipeline.compile_source` (reached by the
+    worker through `compile_pending`) is monkeypatched to a stand-in that
+    behaves like an injected `FakeCompileClient` would, proving
+    `/api/upload` -> the worker counts a successful compile and creates a
+    page for it."""
+    from mythic_proportion.compile import pipeline as compile_pipeline
     from mythic_proportion.compile.models import CompileResult, WikiPage
-    from mythic_proportion.web import jobs as web_jobs_module
 
     vault = _seed_vault(tmp_path)
+    # A constructible, credential-free provider so the worker's LLM preflight
+    # passes; compile_source itself is patched below, so nothing is called.
+    monkeypatch.setenv("MYTHIC_LOCAL", "true")
 
     def _fake_compile_source(vault_root, source, *, settings=None, client=None, now=None):  # noqa: ANN001
         page = WikiPage.new(page_type="source", title=f"Compiled {source.original_name}", body="stand-in body")
@@ -1025,7 +1033,7 @@ def test_api_upload_with_fake_compile_client_succeeds(tmp_path: Path, monkeypatc
         write_page(vault_root, page)
         return CompileResult(pages=[page], contradictions=[], links_created=[])
 
-    monkeypatch.setattr(web_jobs_module, "compile_source", _fake_compile_source)
+    monkeypatch.setattr(compile_pipeline, "compile_source", _fake_compile_source)
 
     fastapi_client = _client(vault)
     content = b"# A Dropped Note\n\nSome plain markdown content about gardening.\n"

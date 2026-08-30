@@ -2,9 +2,14 @@
 
 This file replaces all previous revisions of `HANDOFF.md` in full. Do not
 merge it with, or defer to, any earlier copy of this file you may have seen
-before (an earlier revision directed the next session to continue on branch
-`feat/3d-graphrag` at "Phase 7"; that instruction was already superseded once
-and is now fully retired by this document).
+before. In particular, this revision supersedes the mid-Phase-7 revision
+written earlier in this same extended session (the one that set the
+phase-status table to "Phases 0–6 Complete / Phase 7 In Progress" and
+described only the documentation refresh as Phase 7 work) — a great deal of
+additional Phase 7 closeout work has happened since that revision, and it is
+fully described below. That mid-session revision itself superseded a still
+earlier one that wrongly directed continuation on branch `feat/3d-graphrag`;
+neither older instruction describes the current state of this repository.
 
 ## 1. What this is
 
@@ -19,9 +24,13 @@ non-goals (see Section 6).
 - **Governing plans** (both in the orchestrator control repository,
   `H:\CommandCenter\orchestrator\docs\plans\`, one level up from this repo):
   1. `mythic-proportion-audit-fix-design.md` — Status APPROVED, **complete and
-     closed out**.
-  2. `mythic-proportion-3d-visual-enhancement.md` — Status APPROVED,
-     **Phase 0 and Phase 1 complete, Phases 2–7 not yet started**.
+     closed out**, unchanged since the prior revision of this file.
+  2. `mythic-proportion-3d-visual-enhancement.md` ("Deep-Field Observatory")
+     — Status APPROVED. **Phases 0–6 complete; Phase 7 (closeout)
+     substantially in progress, with one formal checkpoint remaining**: the
+     comprehensive four-mode/both-theme `VISUAL_REVIEW` cross-vendor judge
+     checkpoint that the plan's Section 12 names as "central to this plan."
+     See Section 4 below for full detail.
 - These two plan documents are the source of truth for scope, phase status,
   and approvals. Where anything below and either plan document disagree, the
   plan documents govern.
@@ -31,211 +40,257 @@ non-goals (see Section 6).
 
 ## 2. Repository state
 
-- **Branch**: `main`. Working tree clean, up to date with `origin/main`.
-- **Latest commit**: `1a5d5e7` — "Complete 3D knowledge-graph app rebuild and
-  begin visual enhancement pass" (168 files changed, 14,395 insertions, 528
-  deletions).
-- **Pushed**: confirmed pushed to `origin/main`; push succeeded and the
-  branch is up to date with the remote.
+- **Branch**: `main`, tracking `origin/main`.
+- **Working tree**: currently carries substantial **uncommitted** changes
+  implementing all of Plan 2's Phases 1–6, plus the extensive Phase 7
+  closeout work described in Section 4 below (regression sweep,
+  documentation refresh, four-mode/both-theme visual sweep, the 10k-node
+  performance re-benchmark and its GPU-degradation fix, and the full
+  responsive/accessibility remediation pass). None of this work has been
+  committed or pushed.
 - `origin/feat/3d-graphrag` still exists as a remote branch (an artifact of
-  the earlier merge history). It is not the working branch; `main` is the
-  single source of truth for all further work.
-- **No commit, push, deployment, or pull request is authorized** beyond what
-  has already happened, without a separate, explicit, later user approval.
-  Both governing plans state this explicitly.
+  earlier merge history). It is not the working branch; `main` is the single
+  source of truth for all further work.
+- **No commit, push, deployment, or pull request is authorized** for any of
+  this work without a separate, explicit, later user approval. Both
+  governing plans state this explicitly, and nothing in this session's
+  extensive additional work changes that.
 
 ## 3. Plan 1 — audit, fix, and four-mode design expansion (COMPLETE)
 
 `docs/plans/mythic-proportion-audit-fix-design.md`, approved by
-rob.hasselbach@gmail.com on 2026-07-16 (with a separate token-family
-approval on 2026-07-17). Fully executed and closed out. Delivered:
-
-- **Merge and source of truth**: `feat/3d-graphrag` merged into `main` as
-  the single working branch.
-- **Security hardening**: a CORS allowlist scoped to known local origins
-  (no wildcard); CSRF origin/referer checks on every state-changing
-  `/api/*` POST route (`/api/upload`, `/api/ingest`, `/api/index-graph`,
-  `/api/lint/fix`, `/api/config`); a 50MB upload cap on `/api/upload`
-  enforced by streaming byte-count, not only a post-parse check.
-- **Enriched `/api/graph` data contract**: a projection of already-computed
-  server-side hierarchical Leiden output (`community`, `level`,
-  `centrality`, optional `parentCommunity`) onto entity nodes, backward
-  compatible with the client's existing approximate-grouping fallback; a
-  provenance-gated fix so page and entity nodes only merge in `mode=both`
-  when both title match and real extraction provenance connects them.
-- **Four switchable 3D graph modes**: Cloud (original force-directed view),
-  Orbital Systems, Strata, and Knowledge Terrain, all sharing one
-  single-draw-call `InstancedMesh2` node layer (only the worker's force
-  configuration and a bounded transition blend differ per mode). A
-  mode-switch radiogroup control; bounded (~800ms), interruptible
-  transitions; full per-mode 2D-fallback and accessibility-tree parity.
-- **Graph state lifecycle fix**: `GraphView` now renders mounted-hidden
-  rather than conditionally mounted, so tab excursions (including the
-  "Open in Wiki" round trip) never cold-restart the physics worker or lose
-  selection/filter/expansion state.
-- **TabNav accessibility fix**: replaced a non-conformant ARIA tab-role
-  hybrid with a conformant nav-plus-links pattern (`aria-current="page"`
-  plus a non-color underline/bold cue).
-- **Generative OKLCH community color system** with a WCAG contrast gate,
-  which caught and fixed a real pre-existing contrast bug in the original
-  color ramp.
-- **Overall-app UX upgrade**: first-class reading/detail panes in Wiki,
-  Search, Ask, and Graph; a Cmd+K command palette with grouped sections,
-  full keyboard navigation, and defined empty/no-results states;
-  app-wide focus-context-dim treatment.
-- **Terrain chrome-layer visual assets**: two HDRI skyboxes, two matcap
-  textures, two Trellis2 landmark GLBs, generated via a documented
-  ComfyUI-direct-REST-API pipeline (`web/public/terrain/ASSET_MANIFEST.json`).
-  All are placeholder-labeled, enhancement-only, and load through a
-  non-throwing fallback path — Terrain mode is fully functional with none
-  of them present.
-- **Extensive bug-fixing**, most notably a multi-round 3D camera-fit
-  investigation: at the start of this work the graph rendering was
-  fundamentally broken (invisible nodes, incorrect camera framing at scale,
-  a node-identity duplication bug, a hemisphere sign bug in the camera
-  math). Root-causing this required two escalations to an Opus advisory
-  plus a Fable-model engineering pass before it was fully resolved and
-  confirmed via repeated live browser testing.
-- **Documentation refresh**: root `README.md` and `docs/architecture.md` /
-  `docs/usage.md` / `docs/frontend.md` were brought current with the merged
-  application. The stale-HANDOFF problem that existed at the very start of
-  this plan (an earlier `HANDOFF.md` wrongly directing continuation on the
-  old feature branch) was corrected once during this plan, and is now fully
-  superseded again by this document.
+rob.hasselbach@gmail.com. Fully executed and closed out; unchanged from the
+prior revision of this file. Delivered the branch merge onto `main`, security
+hardening (CORS allowlist, CSRF checks, upload cap), the enriched
+`/api/graph` data contract, the four switchable 3D graph modes (Cloud,
+Orbital Systems, Strata, Knowledge Terrain) sharing one single-draw-call
+`InstancedMesh2` node layer, the graph state lifecycle (mounted-hidden) fix,
+the TabNav accessibility fix, a generative OKLCH community color system with
+a WCAG contrast gate, an overall-app UX upgrade (reading/detail panes,
+command palette, focus-context-dim), Terrain chrome-layer visual assets via
+ComfyUI, and a documentation refresh. Full detail is unchanged from before
+and is not repeated here; see the plan document itself for the complete
+record.
 
 **Baselines at close of Plan 1**: 419 Python tests and 413 frontend tests,
 all passing.
 
-## 4. Plan 2 — Deep-Field Observatory 3D visual enhancement (IN PROGRESS)
+## 4. Plan 2 — Deep-Field Observatory 3D visual enhancement (PHASE 7 IN PROGRESS)
 
 `docs/plans/mythic-proportion-3d-visual-enhancement.md`, approved by
-rob.hasselbach@gmail.com on 2026-07-18, including two explicit
-approval-gated decisions:
+rob.hasselbach@gmail.com, including two explicit approval-gated decisions
+(Decision A, the community-centroid glyph/badge layer, implemented in Phase
+2; Decision B, adding `@react-three/postprocessing` as a new runtime
+dependency, implemented in Phase 4).
 
-- **Decision A (Section 5.9)** — the community-centroid glyph/badge layer —
-  **APPROVED**; implemented in Phase 2.
-- **Decision B (Section 5.9)** — adding `@react-three/postprocessing` as a
-  new runtime dependency — **APPROVED** (exact R3F-v8-compatible v2.x
-  version to be confirmed by engineering at Phase 4 implementation time;
-  the approval does not pin a version number); implemented in Phase 4.
-
-### 4.1 Why this plan exists
-
-Triggered by a Codex `VISUAL_REVIEW` judge checkpoint after Plan 1 closed
-out, which found five real issues: Orbital and Strata modes not visually
-reading their intended metaphor; small/hard-to-read labels; community color
-hard to distinguish in 3D at small sizes; light-theme Terrain contrast
-problems; light-theme Wiki/Search low-contrast text. The user asked for a
-genuine visual-quality leap rather than isolated patches. This went through
-a full Studio design process — three creative directions presented
-(safe/refined/novel) — and the user selected **"Deep-Field Observatory"
-(refined)**: ACES tone mapping, per-mode HDRI/environment lighting via the
-existing ComfyUI pipeline, selective bloom on focus/selection (gated so the
-core node rendering stays a single draw call), edges upgraded to properly
-render weight data (width/opacity), a shader technique giving community
-identity visibility even at tiny pixel sizes in 3D, the approved
-community-centroid glyph/badge layer, and a structural fix for the
-light-theme Terrain contrast problem — all built strictly on top of the
-existing architecture (single-draw-call instanced rendering, worker-owned
-physics, the camera-fit/LOD machinery from Plan 1) without re-architecting
-it.
-
-### 4.2 Phase status
-
-The plan is sequenced as eight phases (Phase 0 through Phase 7) in its
-Section 6:
+### 4.1 Phase status
 
 | Phase | Description | Status |
 |---|---|---|
 | 0 | Readiness and baseline | **Complete** |
 | 1 | Foundation, tokens, F5 contrast fixes, extended contrast gate | **Complete** |
-| 2 | Node material, community identity, and labels | **Not started** |
-| 3 | Edges and weight readout | **Not started** |
-| 4 | Post-processing chain and safe tier (adds `@react-three/postprocessing`) | **Not started** |
-| 5 | Per-mode chrome and 2D/a11y parity | **Not started** |
-| 6 | Chrome-layer assets (HDRI/normal/matcap/landmark generation) | **Not started** |
-| 7 | Closeout | **Not started** |
+| 2 | Node material, community identity, and labels | **Complete** |
+| 3 | Edges and weight readout | **Complete** |
+| 4 | Post-processing chain and safe tier (adds `@react-three/postprocessing`) | **Complete** |
+| 5 | Per-mode chrome and 2D/a11y parity | **Complete** |
+| 6 | Chrome-layer assets (HDRI/normal/matcap/landmark generation) | **Complete** |
+| 7 | Closeout | **Substantially in progress — one formal checkpoint remaining** |
 
-Phase 0 and Phase 1 are independently Verifier-confirmed. Phase 0 established
-green test baselines and confirmed the frontend build serves `/app`. Phase 1
-delivered:
+### 4.2 Phases 0–6 (brief summary — see the plan document and `docs/frontend.md` for full detail)
 
-- ACES tone mapping live at the R3F `Canvas` level.
-- Every new design token family from the plan's Section 5.2 declared, in
-  both light and dark theme: environment/IBL, per-mode fog, bloom, edge-weight,
-  node-material (fresnel/emissive/outline), pattern-id, two-tier labels, and
-  per-mode chrome families for all four modes.
-- The specific light-theme contrast bugs from the `VISUAL_REVIEW` findings
-  fixed at the token level (Wiki sidebar meta text against `--color-bg-inset`,
-  Search result card meta text, the light-theme search-result `mark`
-  element).
-- The contrast test suite extended to cover every new token pairing in both
-  themes, confirmed passing, alongside the pre-existing 8/16/32 community-ramp
-  contrast gate.
+Phases 0–6 are complete and were independently verified across many
+engineering/CODE_REVIEW/Verifier/Browser Validator cycles earlier in this
+session. This section is intentionally brief; do not treat it as the primary
+source on Phases 0–6 — the plan document and `docs/frontend.md` (already
+current) cover it in full detail.
 
-**Two labeled limitations from Phase 1**, carried forward as open items for
-this plan's closeout, not defects:
+- **Phase 2** — node material/shader work: per-instance fresnel-rim and
+  emissive patch, a pattern-id texture for community identity at small
+  pixel sizes, the approved community-centroid glyph/badge layer, and the
+  two-tier label system.
+- **Phase 3** — edge weight readout: a batched fat-line edge pass with
+  weight-driven width/opacity, plus a reading-pane Connections list and
+  accessibility-tree Weight column.
+- **Phase 4** — bloom/safe-tier/effects control: selective bloom and
+  vignette via `@react-three/postprocessing`, a `PerformanceMonitor`-driven
+  degradation ladder, and the toolbar's "Graph detail" effects/quality
+  control (Auto/Full/Balanced/Minimal).
+- **Phase 5** — per-mode chrome for all four modes, plus node deselection.
+  This phase went through an extensive multi-round escalation: the
+  camera-fit approach had to be fully reverted once after it caused real
+  regressions, then rebuilt via a different, verified-safe approach; a real
+  GPU memory leak causing WebGL crashes was found and fixed; a stale
+  hover-state bug causing "stuck" node highlights was found and fixed.
+- **Phase 6** — chrome-layer assets and image-based lighting (IBL) for the
+  Terrain mode, generated via the existing ComfyUI pipeline.
 
-1. "True-disabled" state tokens were declared in Phase 1 but currently have
-   nothing to attach to — no current UI actually has a disabled state. This
-   needs a product decision before this plan's closeout.
-2. The graph node outline color cannot mathematically satisfy contrast
-   against both the background AND every node fill/community color
-   simultaneously, in either theme (proven by direct calculation during
-   Phase 1). It is tuned to the functionally more important pairing —
-   against the node fill — instead.
+### 4.3 Phase 7 (Closeout) — work completed in this extended session
 
-### 4.3 What Phases 2–7 will do
+The following is a complete, ordered account of Phase 7 closeout work
+performed since Phases 0–6 closed. This is the most important section for a
+future session to read closely before continuing.
 
-Per the plan's Section 6:
+**1. Full regression sweep.** `pytest` and `vitest` both green; `tsc`, `ruff`,
+and `mypy` clean; the extended contrast gate green in both themes;
+`ASSET_MANIFEST.json` confirmed byte-consistent with disk.
 
-- **Phase 2** (dependency: Phase 1) — the `onBeforeCompile` fresnel-rim and
-  per-instance emissive patch on the node material (single draw call,
-  `colorsTexture`, never `vertexColors`); a second small data texture
-  carrying a luminance-modulating pattern-id for community identity at
-  small pixel sizes; the approved community-centroid glyph/badge layer
-  (Decision A); the two-tier label system (community titles winning the
-  ~40-label cap, node labels carrying a screen-space minimum size).
-- **Phase 3** (may run in parallel with Phase 2) — a single fat-line
-  (Line2/LineMaterial) edge pass with weight-driven width and opacity; a
-  reading-pane Connections list with numeric edge weight plus an
-  accessibility-tree Weight column; a `"weight: n/a"` fallback for missing
-  weight.
-- **Phase 4** (dependency: Phases 2 and 3) — half-resolution,
-  emissive-driven, token-thresholded selective bloom plus vignette via
-  `@react-three/postprocessing` (Decision B); bloom suppression composed
-  off the existing mode-transition `transitioning` signal; a
-  `PerformanceMonitor`-driven safe-tier degradation ladder; a user-facing
-  effects/quality control (Auto/Full/Balanced/Minimal). This phase carries
-  a hard **early-exit criterion**: a reproducible post-processing
-  performance benchmark at 10,000 nodes must run on the target RTX 3080 Ti
-  host across all four modes and all three effects tiers before Phase 5
-  begins. At least one non-Minimal tier must meet the interactive
-  performance target (p50 ≥ 30 FPS, p95 ≤ ~50ms) at 10k for post-processing
-  to proceed as scoped; if only the Minimal tier meets the target, that
-  result must be surfaced back to the user as a decision (cap the node
-  ceiling or drop post-processing) rather than silently accepted.
-- **Phase 5** (dependency: Phases 1–4) — the four per-mode "atmosphere"
-  treatments: Cloud nebula haze; Orbital ecliptic disc/rings/core glow;
-  Strata graded floor planes and an etched labeled axis; Terrain hillshade,
-  contours, theme-paired sky, and the structural light-theme
-  darkened-elements fix — each with matching 2D-fallback chrome and
-  accessibility-tree parity.
-- **Phase 6** (dependency: Phase 5; enhancement-only, never blocking) — the
-  chrome-layer asset generation pass via ComfyUI REST plus Trellis2: a
-  refreshed dark HDRI, a new light-theme high-key HDRI (none exists today),
-  a terrain detail/hillshade normal map, and optionally refreshed matcaps
-  or additional landmark GLBs toward the existing 6-GLB cap.
-- **Phase 7** (dependency: Phases 0–6) — closeout: full green
-  pytest/vitest/`make check`; the extended contrast gate green in both
-  themes; an independent Verifier pass; a Browser Validator pass covering
-  both the prior-machinery re-confirmation gate and the new visual
-  acceptance gate, across all viewports, both themes, reduced motion, and
-  forced-colors; applicable Codex judge checkpoints; a refreshed
-  `ASSET_MANIFEST.json`; and a documentation refresh (this is when
-  `README.md` and the frontend docs should next be updated to reflect the
-  visual-enhancement work). No commit, push, deployment, or pull request
-  without a separate, explicit, later user approval.
+**2. Documentation refresh.** `README.md`, `docs/frontend.md`,
+`docs/architecture.md`, and this file were brought current with the
+completed Phases 1–6. (That earlier documentation pass is superseded and
+extended by this current revision, not redone.)
+
+**3. Comprehensive four-mode/both-theme visual sweep.** All 8 combinations
+(Cloud/Orbital/Strata/Terrain × dark/light) confirmed rendering correctly,
+with distinct per-mode chrome and correct selection/deselection behavior in
+each; light-theme Terrain's node-vs-sky contrast was specifically
+re-confirmed.
+
+A false alarm surfaced and was resolved during this sweep: a
+"continuous camera zoom-out" defect that looked severe on first discovery
+turned out, after rigorous live instrumentation (180+ seconds of direct
+measurement), to be caused by a stale/orphaned dev-server process left over
+from earlier testing sessions in this same session — not a real code defect.
+A clean-environment retest confirmed zero drift across all 8 combinations.
+
+> **LESSON FOR FUTURE SESSIONS:** this project's live-testing history has
+> repeatedly been confounded by accumulated stale dev-server processes across
+> long sessions. Always verify a clean, single-server environment (check
+> ports 5173–5185, kill orphans) before trusting an unexpected live-test
+> failure, especially anything camera- or performance-related.
+
+**4. 10,000-node performance re-benchmark.** Re-run because Phase 5/6 added
+real GPU cost since Phase 4's original benchmark (Section 4.2 above; see the
+plan document for that original benchmark's numbers). This re-benchmark
+found a genuine, severe regression: Cloud mode at the "Full" effects/quality
+tier crashed (WebGL context loss / render-thread hang) within 3–9 seconds at
+10k nodes.
+
+Root cause: the "Full" tier was implemented in a way that also **disabled**
+the app's own emergency GPU-pressure safety valve — the
+`PerformanceMonitor`-driven auto-degradation ladder that normally sheds
+bloom, then ambient effects, then chrome, then LOD under sustained pressure.
+"Full" quality therefore had no way to self-rescue and simply crashed
+instead of gracefully degrading.
+
+Fix: "Full" now respects the live degradation signal — it still starts at
+full quality, but can shed load under genuine sustained pressure, the same
+as "Auto." Re-tested: 5 consecutive runs across the worst-case combinations
+(Cloud+Full+10k ×3, Terrain+light+Full+10k, Orbital+Full+10k) all passed
+cleanly on the target RTX 3080 Ti host.
+
+> **HONEST CAVEAT for future sessions:** in none of those 5 passing runs did
+> the degradation ladder actually visibly engage — the GPU simply was not
+> under enough sustained pressure to need it during retesting. So while the
+> underlying design flaw (an emergency safety valve that could be disabled)
+> is confirmed fixed, and is objectively correct regardless, whether this
+> specific fix is what would prevent the *original* crash under genuinely
+> heavier load has not been directly observed in action — only inferred from
+> clean re-test results. If a 10k-node context-loss crash is ever reported
+> again in Full tier specifically, revisit this.
+
+**5. Responsive/accessibility matrix** (this plan's Section 8/10
+requirement, never previously exercised in this whole project — all prior
+live testing in this project's history had been done at a single ~1440
+desktop viewport only):
+
+- **~834px tablet**: clean, first attempt.
+- **~375px narrow**: clean, first attempt (toolbar wraps, reading pane
+  becomes a dismissible bottom sheet).
+- **400% zoom / 320px reflow** (the WCAG 1.4.10 reference point): required
+  four remediation cycles to fully resolve, each closing with a real,
+  useful finding:
+  1. Real horizontal-overflow bug — the top navigation did not reflow at
+     320px. Fixed.
+  2. The graph's hidden accessibility tree (`GraphA11yTree`, the *only*
+     keyboard path to select individual graph nodes in the default 3D
+     view) was never actually properly "visually hidden but focusable," as
+     the plan's own design had always assumed. A CSS `:focus-within` rule
+     was inadvertently un-hiding it destructively whenever a keyboard user
+     tabbed into it, at every viewport width, crushing the reading pane at
+     narrow widths specifically. The first fix attempt (making it
+     permanently invisible) traded that bug for a new one: a real WCAG
+     2.4.7 (Focus Visible) violation — up to ~1,500 sequential tabbable
+     controls with zero visible focus indicator for sighted keyboard users.
+  3. The corrected fix — a bounded, capped-height reveal on focus, with
+     focus programmatically moved to the reading pane after a
+     tree-driven selection — was structurally correct but had a small,
+     precisely-measured 8px CSS math gap: a flex-layout `gap` spacing value
+     was not included in a container-growth calculation. Caught by a live
+     test.
+  4. All four issues are now fixed and confirmed via a final live re-test
+     with exact pixel measurements: the a11y tree now reveals as a
+     properly bounded, visible-with-focus-outline box (not permanently
+     invisible, not unboundedly large); the canvas/reading pane never gets
+     crushed (measured 265px, versus a prior failure state of ~9px);
+     selecting a node via the tree correctly moves focus to the reading
+     pane, and the tree cleanly collapses back to hidden with no visual
+     overlap.
+- **Reduced motion** (`prefers-reduced-motion: reduce`): confirmed clean —
+  mode transitions and hover/select glow are instant; auto-2D-fallback-on-
+  reduced-motion confirmed working.
+- **Forced colors** (Windows High Contrast Mode emulation): confirmed
+  clean — DOM chrome (toolbar, reading pane, labels) remains fully legible
+  and keyboard-operable; canvas color is correctly decorative-only in this
+  mode.
+
+> **NOTE — tooling.** The 320px/zoom, reduced-motion, and forced-colors
+> checks required installing Playwright + Chromium (pinned version
+> 1.61.0/1.61.1) into the local npm/Playwright user cache, with explicit
+> user approval obtained first. This did not touch the project's own
+> `package.json`, lockfile, or source — only a shared local tool cache.
+>
+> **NOTE — one-time external tool exception.** For the final small 8px-gap
+> CSS fix specifically, the user explicitly authorized, as a one-time
+> exception, consulting an external "agy" CLI tool with a Gemini 3.1 Pro
+> model for a second opinion before implementing. This is **not** this
+> project's standard practice — the standard/only authorized cross-vendor
+> review tool for this project is the guarded local Codex CLI integration
+> (`docs/JUDGE-CONTRACT.md`) — and should not be assumed available or
+> repeated automatically in a future session without the same kind of
+> explicit, one-time user approval.
+
+### 4.4 What remains for Phase 7 closeout (not yet done)
+
+**1. The comprehensive four-mode/both-theme `VISUAL_REVIEW` cross-vendor
+judge checkpoint.** The governing plan explicitly deferred this specific
+formal checkpoint from every earlier phase to this final closeout step (the
+plan's Section 12 names it as "central to this plan"). It requires:
+
+- (a) Fresh screenshots captured and **saved to a location inside this
+  repository**, covering all 4 modes in both themes. None of the extensive
+  screenshots taken during this session's live testing (Section 4.3 above)
+  were saved in a way that satisfies this requirement — they went to
+  temp/scratch directories outside the repository.
+- (b) A judge call routed through the project's standard guarded local
+  Codex CLI review process (`docs/JUDGE-CONTRACT.md`) — **not** the
+  one-time "agy"/Gemini exception used for the small CSS fix in Section 4.3.
+
+This is the one formal, plan-required gate standing between the current
+state and declaring Phase 7 — and the whole Deep-Field Observatory plan —
+fully closed out.
+
+**2. After that checkpoint**, Phase 7's own closeout checklist should be
+marked fully complete in this file and in the plan document's own status
+line, per the plan's Section 17 approval-gate convention.
+
+### 4.5 Behavior changes an operator/developer should know
+
+- `web/package.json` has one new runtime dependency,
+  `@react-three/postprocessing` — run `npm install` fresh after pulling this
+  work.
+- The Graph view has a new user-facing "Graph detail" effects/quality
+  control in the toolbar (Auto/Full/Balanced/Minimal); "Full" now respects
+  the live GPU-degradation signal rather than disabling it (Section 4.3
+  item 4 above).
+- Node selection can be cleared via Escape, a close button, or an
+  empty-canvas click.
+- The graph's hidden accessibility tree (`GraphA11yTree`) now reveals as a
+  bounded, visible-with-focus-outline box on keyboard focus, rather than
+  either staying destructively un-hidden or permanently invisible (Section
+  4.3 item 5 above).
+- No new dev commands or flags were introduced by this plan; the existing
+  `?syntheticGraph=N` dev-only Vite query parameter remains the mechanism
+  for exercising the visual layer with synthetic data at 1.5k/10k scale.
 
 **Engineering routing for this plan**: `t2-engineer` (Sonnet) is the sole
 engineering writer for every phase; T1 is not used (per the plan's Section
@@ -243,42 +298,34 @@ engineering writer for every phase; T1 is not used (per the plan's Section
 
 ## 5. Current test and build baselines
 
-Directly re-confirmed against the live working tree at the time of writing
-this document:
+The following were confirmed green during the Phase 7 regression sweep
+(Section 4.3, item 1): `pytest`, `vitest`, `tsc --noEmit -p .` (strict),
+`npm run build`, `ruff check .`, `mypy src`, and the extended contrast gate
+(`contrast.test.ts`) in both themes. `ASSET_MANIFEST.json` was confirmed
+byte-consistent with disk.
 
-- **Python**: `python -m pytest --collect-only -q` collects **419 tests**
-  (unchanged from Plan 1's close).
-- **Frontend**: `cd web && npx vitest run` — **430 tests across 43 files,
-  all passing** (up from 413 at Plan 1's close; +17 new tests from Plan 2's
-  Phase 1 contrast-gate extension).
-
-One operational note for a future session: on one of two consecutive local
-runs, `vitest run` reported 3 failures / 2 errors, all originating from
-`src/routes/graph/__tests__/forceLayoutModes.test.ts` with a jsdom
-`postMessage`/Worker-mocking error (`SyntaxError: Failed to execute
-'postMessage' ... Invalid target origin '[object ArrayBuffer]'`). An
-immediate re-run of the identical command was fully green (430/430, 43/43
-files). This reads as jsdom/Worker-mock environment flakiness on this
-particular run, not a reproduced code defect, but it was not exhaustively
-investigated as part of writing this document — a future session should
-re-run once if it sees a similar isolated failure in that file before
-treating it as a regression.
-
-`README.md`'s own "Development" section currently states 419 pytest / 380
-vitest as its baseline; that count predates Plan 2's Phase 1 work and is now
-stale by 50 tests. Refreshing it is in scope for Plan 2's Phase 7 closeout
-documentation pass, not before.
+**Honest gap:** no exact, final, consolidated pass/fail counts (test
+counts, file counts) for this most recent regression sweep are available to
+this document beyond "all green" as stated above. The last recorded exact
+counts, from the prior HANDOFF revision (sourced from the Phase 1–6
+`DOCUMENTATION_HANDOFF` packet, before this session's further Phase 7 work),
+were 419 Python tests across 30 files and 881 frontend tests across 79
+files. Given the amount of Phase 7 work since (including new
+responsive/accessibility fixes), those exact numbers should be treated as
+approximate history, not a current baseline. **A future session should
+re-run the full suite and record the current exact counts as part of
+finishing Phase 7**, rather than relying on the numbers above.
 
 ## 6. Deferred non-goals (unchanged, not scheduled)
 
-Confirmed still true by direct repository inspection: `agents/__init__.py`
-and `mcp/__init__.py` remain one-line stubs; there is no `mythic mcp` CLI
-verb; there is no `tools/` ComfyUI directory for a standing product
-pipeline; the legacy `/` single-page app and `web/static/` remain
-intentionally preserved, with no retirement scheduled. None of these are
-scheduled by either governing plan. Any of them requires its own planning
-pass through the orchestrator's Planner, producing a fresh approved plan,
-before any implementation begins.
+Confirmed still true by direct repository inspection as of the last full
+check: `agents/__init__.py` and `mcp/__init__.py` remain one-line stubs;
+there is no `mythic mcp` CLI verb; there is no `tools/` ComfyUI directory
+for a standing product pipeline; the legacy `/` single-page app and
+`web/static/` remain intentionally preserved, with no retirement scheduled.
+None of these are scheduled by either governing plan. Any of them requires
+its own planning pass through the orchestrator's Planner, producing a fresh
+approved plan, before any implementation begins.
 
 ## 7. How to run it today
 
@@ -314,20 +361,34 @@ mythic lint ./my-vault
 mythic watch ./my-vault
 
 # Web UI (requires: pip install 'mythic-proportion[web]'). The React
-# frontend at /app is NOT committed to the repo -- build it once per
-# checkout before serving, or /app returns 404:
-cd web && npm install && npm run build && cd ..
-mythic serve --vault ./my-vault   # defaults to 127.0.0.1:8765
+# frontend at /app is NOT committed to the repo; the launcher builds it
+# when stale, so /app never 404s on a fresh checkout:
+./scripts/prod.sh    # 127.0.0.1:8765 over ./my-vault
+./scripts/dev.sh     # localhost:5173 (Vite HMR) + :8766 backend over ./dev-vault
+# (PowerShell: .\scripts\prod.ps1 / .\scripts\dev.ps1. `make prod`/`make dev`
+#  work too, but GNU make is not installed on all dev machines.)
 ```
 
 - `/app` serves the current React + React-Three-Fiber frontend (built
   above). `/` serves the original vanilla-JS single-page app, preserved
   unchanged for parity.
-- For live frontend development against the Graph view specifically, the
-  Vite dev server (`cd web && npm run dev`, reaching a URL near
-  `http://localhost:5173/app/` — confirm the exact printed port) supports
+- `./scripts/dev.sh` (`scripts/dev.ps1`) is the supported live-development path: it
+  boots a backend on `:8766` over the throwaway `./dev-vault` and Vite on
+  `http://localhost:5173/app/`, with `/api` proxied to that backend
+  (`web/vite.config.ts`) so the frontend is fully wired, and stops both on
+  Ctrl+C. The Vite port is now `strictPort`, so an occupied 5173 fails loudly
+  instead of drifting to 5174+. The dev server also supports
   the dev-only `?syntheticGraph=N` query parameter to exercise the graph
-  with synthetic data without a live backend.
+  with synthetic data without a live backend. Before trusting any
+  unexpected live-test result, especially anything camera- or
+  performance-related, confirm a clean single-server environment first
+  (check ports 5173–5185 for orphaned processes) — see the lesson recorded
+  in Section 4.3 above.
+- `web/package.json` gained a new runtime dependency,
+  `@react-three/postprocessing`, during Plan 2's Phase 4 — a fresh
+  `npm install` is required after pulling this work (the `npm install`
+  step above already covers it). The Graph view's toolbar also has a
+  "Graph detail" effects/quality control (Auto/Full/Balanced/Minimal).
 - Test and lint commands: `python -m pytest -q --cov=mythic_proportion`,
   `python -m ruff check .`, `python -m mypy src`, `cd web && npx vitest
   run`, `cd web && npm run build`, or `make check` for ruff + mypy + pytest
@@ -337,35 +398,51 @@ mythic serve --vault ./my-vault   # defaults to 127.0.0.1:8765
 
 ## 8. What a future session should do next
 
-**Resume Plan 2 at Phase 2** (`docs/plans/mythic-proportion-3d-visual-enhancement.md`,
-Section 6, "Phase 2 — Node material, community identity, and labels").
-Phase 1's foundation (tokens, ACES tone mapping, the extended contrast gate)
-is the completed prerequisite Phase 2 depends on. Concretely:
+**Close out Plan 2's Phase 7** — one formal checkpoint remains
+(`docs/plans/mythic-proportion-3d-visual-enhancement.md`, Section 12).
+Concretely:
 
 1. Re-read the full plan document, not only this summary — it carries the
-   binding engineering invariants (Section 5.6), the acceptance gates
-   (Section 8), and the exact per-phase scope (Section 6).
-2. Route the next `ENGINEERING_JOB` to `t2-engineer`, per the plan's
-   routing (Section 14/16); T1 is not used for this plan.
-3. Implement Phase 2 as scoped: the fresnel/emissive node-material patch,
-   the pattern-id data texture, the community-centroid glyph/badge layer
-   (already user-approved as Decision A), and the two-tier label system.
-   Take explicit care against the documented `vertexColors` black-multiply
-   bug when patching the node material (Section 3.3/5.6 item 1 of the
-   plan).
-4. Phase 3 (edges and weight readout) may run in parallel with Phase 2,
-   since both depend only on Phase 1.
-5. Do not begin Phase 4's post-processing work without first confirming
-   Phase 4's early-exit performance benchmark criterion (Section 6, Section
-   8.2 item 8 of the plan) — it is a hard gate on the target RTX 3080 Ti
-   hardware, not an assumption.
-6. No commit, push, deployment, or pull request is authorized for any of
-   this work without a separate, explicit, later user approval, per both
-   governing plans.
+   binding engineering invariants and the exact Section 12 judge-route
+   requirements.
+2. Run the comprehensive four-mode/both-theme `VISUAL_REVIEW` checkpoint
+   (Section 4.4 above):
+   - Capture fresh screenshots covering all 4 modes in both themes and
+     **save them to a location inside this repository** — do not reuse or
+     rely on this session's earlier screenshots, which went to
+     temp/scratch directories outside the repository.
+   - Route the judge call through the project's **standard guarded local
+     Codex CLI review process** (`docs/JUDGE-CONTRACT.md`) — not the
+     one-time "agy"/Gemini exception used earlier in this session for an
+     unrelated small CSS fix; that exception is not standing practice and
+     should not be assumed available without fresh, explicit user
+     approval.
+   - Before doing any further live browser testing as part of this
+     checkpoint, confirm a clean, single dev-server environment (check
+     ports 5173–5185 for orphaned processes) — see the stale-dev-server
+     lesson in Section 4.3 above.
+3. Re-run the full test/build suite and record the current exact
+   pass/fail counts in this file's Section 5, replacing the approximate
+   historical numbers there.
+4. Once the `VISUAL_REVIEW` checkpoint and its evidence are complete, mark
+   Phase 7's closeout checklist complete in this file and update the plan
+   document's own status line, per the plan's Section 17 approval-gate
+   convention.
+5. If a 10k-node WebGL context-loss crash is ever reported again in "Full"
+   effects tier specifically, revisit the fix and caveat recorded in
+   Section 4.3, item 4 above — the design fix is confirmed correct, but its
+   effectiveness against the original crash scenario was inferred from
+   clean re-test results, not directly observed engaging under load.
+6. **No commit, push, deployment, or pull request is authorized** for any
+   of this work without a separate, explicit, later user approval, per both
+   governing plans. The working tree currently holds all of Plan 2's
+   Phases 1–6 and this session's Phase 7 closeout work uncommitted (Section
+   2 above).
 
-Do **not** resume any older "continue at Phase 7" or "push
-`feat/3d-graphrag`" instruction; that instruction was already retired
-during Plan 1 and no longer applies to any file, including this one.
+Do **not** resume any older "continue at Phase 7" instruction from a version
+of this file that predates this revision — those instructions describe an
+earlier, less-complete state of Phase 7 and are superseded in full by this
+document.
 
 ## 9. Historical build narrative (for context, pre-dates both governing plans)
 

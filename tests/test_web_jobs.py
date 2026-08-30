@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from mythic_proportion.compile import pipeline as compile_pipeline
 from mythic_proportion.compile.models import CompileError, CompileResult, WikiPage
 from mythic_proportion.compile.writer import write_page
 from mythic_proportion.config import Settings
@@ -36,13 +37,35 @@ def _settings(vault: Path) -> Settings:
     # closing a fail-closed bypass a prior review found). These tests
     # exercise the worker/queue mechanics, not privacy, so they explicitly
     # opt out (see test_privacy_redact.py for dedicated redaction coverage).
-    return Settings(vault_path=vault, redaction_enabled=False)
+    #
+    # `local=True` routes client selection to Ollama, which constructs
+    # without any credential and without touching the network -- these tests
+    # patch `compile_source` itself, so no request is ever made. It is needed
+    # because the worker now runs an LLM *preflight* before ingesting (a
+    # missing provider must not strand files as ingested-but-uncompiled), and
+    # a credential-less default provider would correctly abort the job.
+    return Settings(vault_path=vault, redaction_enabled=False, local=True)
 
 
 def _drop_file(vault: Path, name: str, content: bytes = b"# note\n\nSome content.\n") -> None:
     drop_dir = vault / "drop"
     drop_dir.mkdir(parents=True, exist_ok=True)
     (drop_dir / name).write_bytes(content)
+
+
+@pytest.fixture
+def worker_without_llm(tmp_path: Path):
+    """A worker whose provider has no credential -- for the tests that assert
+    on the *absence* of a usable LLM (the `worker` fixture deliberately has
+    one, since the ingest preflight now refuses to ingest without it)."""
+    vault = _seed_vault(tmp_path)
+    w = IngestWorker(
+        vault,
+        get_settings=lambda: Settings(vault_path=vault, redaction_enabled=False),
+    )
+    w.start()
+    yield w, vault
+    w.stop(timeout=5.0)
 
 
 @pytest.fixture
@@ -62,7 +85,7 @@ def test_ingest_status_shape_for_a_completed_job(worker, monkeypatch) -> None:
         write_page(vault_root, page)
         return CompileResult(pages=[page], contradictions=[], links_created=[])
 
-    monkeypatch.setattr(web_jobs_module, "compile_source", _fake_compile_source)
+    monkeypatch.setattr(compile_pipeline, "compile_source", _fake_compile_source)
 
     _drop_file(vault, "alpha.md")
     job_id = w.enqueue()
@@ -161,7 +184,7 @@ def test_per_file_compile_error_is_isolated_others_still_succeed(worker, monkeyp
         write_page(vault_root, page)
         return CompileResult(pages=[page], contradictions=[], links_created=[])
 
-    monkeypatch.setattr(web_jobs_module, "compile_source", _flaky_compile_source)
+    monkeypatch.setattr(compile_pipeline, "compile_source", _flaky_compile_source)
 
     _drop_file(vault, "good-1.md", b"# good one\n\nfirst\n")
     _drop_file(vault, "bad.md", b"# bad one\n\nsecond\n")
@@ -231,12 +254,12 @@ def test_ledger_race_fixed_batch_of_sources_all_recorded(worker, monkeypatch) ->
         )
 
 
-def test_enqueue_graph_job_reports_setup_error_without_crashing_worker(worker) -> None:
+def test_enqueue_graph_job_reports_setup_error_without_crashing_worker(worker_without_llm) -> None:
     """Bugfix DEFECT 1 (wiring gap): `enqueue_graph` -- the web UI's "Build
     Knowledge Graph" action -- must never crash the worker thread, and a
     setup failure (no AUTHHUB_API_KEY, redaction disabled here to isolate
     just the credential check) is reported as `GraphJob.error`."""
-    w, vault = worker
+    w, vault = worker_without_llm
     job_id = w.enqueue_graph()
     assert w.wait_idle(timeout=5.0)
 
@@ -284,7 +307,7 @@ def test_auto_build_graph_toggle_runs_graph_reindex_after_ingest(tmp_path: Path,
         write_page(vault_root, page)
         return CompileResult(pages=[page], contradictions=[], links_created=[])
 
-    monkeypatch.setattr(web_jobs_module, "compile_source", _fake_compile_source)
+    monkeypatch.setattr(compile_pipeline, "compile_source", _fake_compile_source)
 
     def _fake_do_reindex_graph(self, settings):  # noqa: ANN001
         calls.append(settings)
@@ -296,7 +319,7 @@ def test_auto_build_graph_toggle_runs_graph_reindex_after_ingest(tmp_path: Path,
 
     monkeypatch.setattr(web_jobs_module.IngestWorker, "_do_reindex_graph", _fake_do_reindex_graph)
 
-    settings = Settings(vault_path=vault, redaction_enabled=False, auto_build_graph=True)
+    settings = Settings(vault_path=vault, redaction_enabled=False, auto_build_graph=True, local=True)
     w = IngestWorker(vault, get_settings=lambda: settings)
     w.start()
     try:
@@ -323,7 +346,8 @@ def test_auto_build_graph_off_by_default_never_calls_reindex_graph(tmp_path: Pat
 
     monkeypatch.setattr(web_jobs_module.IngestWorker, "_do_reindex_graph", _fake_do_reindex_graph)
 
-    settings = Settings(vault_path=vault, redaction_enabled=False)  # auto_build_graph defaults False
+    # local=True: constructible provider for the ingest preflight (see `_settings`).
+    settings = Settings(vault_path=vault, redaction_enabled=False, local=True)
     w = IngestWorker(vault, get_settings=lambda: settings)
     w.start()
     try:

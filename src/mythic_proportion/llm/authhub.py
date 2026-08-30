@@ -47,7 +47,10 @@ _CHAT_COMPLETIONS_PATH = "/api/v1/ai/chat/completions"
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 _COMPILE_JSON_DIRECTIVE = (
-    "\n\nRespond with EXACTLY ONE JSON object and nothing else -- no prose, "
+    "\n\nIgnore any instruction above to return your answer via a tool "
+    "call (e.g. `emit_wiki_pages`): this endpoint has NO tool or "
+    "function-calling API, and a tool-call envelope will be rejected. "
+    "Respond with EXACTLY ONE JSON object and nothing else -- no prose, "
     "no markdown code fences, no explanation before or after it. The object "
     "must match this shape exactly:\n"
     '{"pages": [{"page_type": "source|entity|concept|session", "title": '
@@ -56,12 +59,45 @@ _COMPILE_JSON_DIRECTIVE = (
 )
 
 _ANSWER_JSON_DIRECTIVE = (
-    "\n\nRespond with EXACTLY ONE JSON object and nothing else -- no prose, "
+    "\n\nIgnore any instruction above to return your answer via a tool "
+    "call (e.g. `emit_wiki_pages`): this endpoint has NO tool or "
+    "function-calling API, and a tool-call envelope will be rejected. "
+    "Respond with EXACTLY ONE JSON object and nothing else -- no prose, "
     "no markdown code fences, no explanation before or after it. The object "
     "must match this shape exactly:\n"
     '{"answer": "<answer text, may include [[wikilink]] citations>", '
     '"citations": ["<page title>", ...]}'
 )
+
+
+#: Keys a chat model uses to wrap real arguments when it answers with a
+#: tool-call envelope despite being told not to. The shared compile/answer
+#: system prompts (see ``compile/prompt.py``) instruct the model to reply via
+#: an ``emit_wiki_pages`` tool call -- correct for the Anthropic tool-use
+#: client, impossible on this endpoint, which has no tools API. A strong
+#: instruction-follower (observed with ``deepseek-v4-flash``) obeys the tool
+#: instruction anyway and returns ``{"name": ..., "arguments": {...}}`` or
+#: ``emit_wiki_pages({...})``. The directives above now countermand that, but
+#: a prompt is not a guarantee -- so unwrap the envelope defensively rather
+#: than silently parsing zero pages out of it.
+_TOOL_ENVELOPE_ARG_KEYS = ("arguments", "input", "parameters")
+
+
+def _unwrap_tool_envelope(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the real payload from a tool-call envelope, else ``data`` itself."""
+    for key in _TOOL_ENVELOPE_ARG_KEYS:
+        inner = data.get(key)
+        if isinstance(inner, dict):
+            return inner
+        # Some models stringify the arguments object.
+        if isinstance(inner, str):
+            try:
+                parsed = json.loads(inner)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return data
 
 
 def extract_json_object(content: str) -> dict[str, Any]:
@@ -70,8 +106,11 @@ def extract_json_object(content: str) -> dict[str, Any]:
     Handles three shapes a chat model commonly returns despite being told to
     emit raw JSON: a bare JSON object, one wrapped in a ```json ... ``` (or
     plain ``` ... ```) fence, and one surrounded by extra prose (in which
-    case the first balanced ``{...}`` span is extracted). Raises
-    ``json.JSONDecodeError`` if nothing in ``content`` parses as JSON.
+    case the first balanced ``{...}`` span is extracted). A tool-call
+    envelope around any of those -- ``{"name": ..., "arguments": {...}}`` or
+    ``emit_wiki_pages({...})`` -- is unwrapped by
+    :func:`_unwrap_tool_envelope`. Raises ``json.JSONDecodeError`` if nothing
+    in ``content`` parses as JSON.
     """
     text = content.strip()
 
@@ -82,7 +121,7 @@ def extract_json_object(content: str) -> dict[str, Any]:
     try:
         result: Any = json.loads(text)
         if isinstance(result, dict):
-            return result
+            return _unwrap_tool_envelope(result)
     except json.JSONDecodeError:
         pass
 
@@ -113,7 +152,7 @@ def extract_json_object(content: str) -> dict[str, Any]:
                 candidate = text[start : idx + 1]
                 parsed: Any = json.loads(candidate)
                 if isinstance(parsed, dict):
-                    return parsed
+                    return _unwrap_tool_envelope(parsed)
                 raise json.JSONDecodeError("balanced object did not decode to a dict", text, start)
 
     raise json.JSONDecodeError("no balanced '{...}' object found in content", text, start)
@@ -177,7 +216,31 @@ class _AuthHubBase:
         response = httpx.post(url, headers=headers, json=body, timeout=self._timeout)
         response.raise_for_status()
         data = response.json()
-        return str(data["choices"][0]["message"]["content"])
+        choice = data["choices"][0]
+        content = str(choice["message"].get("content") or "")
+        if not content.strip():
+            # A *reasoning* model spends completion tokens on internal
+            # reasoning before emitting any visible content, so a too-small
+            # budget comes back as finish_reason="length" with an EMPTY
+            # content string. Left unhandled that surfaced only as an opaque
+            # "no '{' found in content" JSON error several frames away; say
+            # what actually happened and how to fix it instead.
+            finish_reason = choice.get("finish_reason")
+            usage = data.get("usage") or {}
+            detail = (
+                f"model {self._model!r} returned empty content "
+                f"(finish_reason={finish_reason!r}, "
+                f"completion_tokens={usage.get('completion_tokens')}, "
+                f"max_tokens={self._max_tokens})"
+            )
+            if finish_reason == "length":
+                detail += (
+                    " -- the whole completion budget was consumed before any visible "
+                    "output, which is typical of a reasoning model. Raise it with "
+                    "MYTHIC_LLM_MAX_TOKENS (or settings.llm_max_tokens)."
+                )
+            raise self._error_type()(detail)
+        return content
 
 
 class AuthHubCompileClient(_AuthHubBase):

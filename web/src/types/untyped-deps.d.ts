@@ -128,6 +128,10 @@ declare module "troika-three-text" {
     anchorY: string | number;
     outlineWidth: number | string;
     outlineColor: number | string;
+    /** Deep-Field Observatory Phase 2 (plan Section 5.2 "Typography": community titles at "weight 600"). Real troika-three-text prop (see `Text.js`'s `fontWeight`/Typesetter.js) -- this hand-written ambient declaration previously omitted it. */
+    fontWeight: number | "normal" | "bold";
+    /** Deep-Field Observatory Phase 5 (`StrataAxis.tsx`'s cross-fade-aware axis labels). Real troika-three-text prop (`Text.js`'s `fillOpacity`, distinct from `material.opacity` -- troika's own recommended way to fade SDF text) -- this hand-written ambient declaration previously omitted it. */
+    fillOpacity: number;
     sync(callback?: () => void): void;
     dispose(): void;
   }

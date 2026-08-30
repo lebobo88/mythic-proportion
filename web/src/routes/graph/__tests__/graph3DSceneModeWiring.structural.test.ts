@@ -51,8 +51,18 @@ describe("Graph3DScene wires the mode-transition engine into its mode-change eff
     expect(source).toMatch(/transitionRef\.current = null;[\s\S]{0,400}setTransitioning\(false\);/);
   });
 
-  it("conditionally renders <TerrainSurface> only in terrain mode -- never mounted for the other three modes", () => {
-    expect(source).toMatch(/mode === "terrain" \? <TerrainSurface/);
+  // Verifier remediation cycle 1 (VERIFICATION_NEEDS_FIX, major, Fix b):
+  // this assertion previously required a HARD `mode === "terrain" ? ... :
+  // null` mount/unmount boundary -- that WAS the defect (Terrain popped
+  // instantly instead of cross-fading like the other three modes). Updated
+  // to assert the corrected behavior: TerrainSurface now renders whenever
+  // the pure `resolveTerrainCrossfade` resolver (unit-tested directly in
+  // `modeChrome.test.ts`) says it should be visible -- terrain mode OR a
+  // still-fading-out outgoing terrain -- never an unconditional/permanent
+  // mount for a non-terrain mode once its fade-out completes.
+  it("renders <TerrainSurface> via the resolveTerrainCrossfade resolver -- visible in terrain mode AND while terrain is still fading out as the outgoing mode of an in-flight transition, never as a hard mount/unmount boundary", () => {
+    expect(source).toMatch(/resolveTerrainCrossfade\(mode, outgoingModeRef\.current, transitioning, chromeAlpha\)/);
+    expect(source).toMatch(/terrainCrossfade\.visible \? \(\s*<TerrainSurface/);
   });
 
   it("passes `mode` through to the real useForceLayoutWorker hook (not a second, parallel worker wiring)", () => {

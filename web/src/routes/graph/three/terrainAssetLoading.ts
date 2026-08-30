@@ -21,7 +21,9 @@ import { useEffect, useState } from "react";
 import {
   EquirectangularReflectionMapping,
   Material,
+  NoColorSpace,
   Object3D,
+  RepeatWrapping,
   SRGBColorSpace,
   Texture,
   TextureLoader,
@@ -152,6 +154,55 @@ export function useOptionalTexture(
     loader,
     (texture) => {
       texture.colorSpace = SRGBColorSpace;
+    },
+    (texture) => texture.dispose(),
+  );
+}
+
+/**
+ * Terrain detail-normal tiling repeat factor (Deep-Field Observatory Phase 6,
+ * plan Section 3.1 item 6 / Section 5.4 "A3 -- terrain detail/hillshade
+ * texture"): the ground mesh's default `PlaneGeometry` UVs span [0, 1]
+ * across the WHOLE mesh, so a single un-repeated sample would stretch the
+ * 1024x1024 detail normal across the entire terrain footprint and read as
+ * smooth, not as fine micro-relief. A flat planar (single-UV, top-down)
+ * repeat is used rather than true multi-axis tri-planar blending because
+ * this terrain is a near-flat heightfield (a fixed `TERRAIN_MAX_HEIGHT`
+ * against a footprint in the hundreds -- see `TerrainSurface.tsx`), so
+ * surface normals stay near-vertical everywhere and a top-down projection
+ * does not visibly stretch on any slope actually present. A documented,
+ * labeled simplification (Section 5.7's permitted variation), not a literal
+ * tri-planar shader.
+ */
+const TERRAIN_DETAIL_NORMAL_REPEAT = 24;
+
+/**
+ * Loads the optional terrain detail/hillshade normal map (Deep-Field
+ * Observatory Phase 6, plan Section 3.1 item 6 / Section 5.4 "A3"). Distinct
+ * from `useOptionalTexture` in two ways a matcap/color texture must NOT have:
+ * (1) `NoColorSpace`, never `SRGBColorSpace` -- a normal map is linear
+ * per-channel XYZ data, and sRGB gamma-correcting it would invert/wash the
+ * relief (Section 5.4: "LINEAR/`NoColorSpace` -- an sRGB flag would
+ * invert/wash the relief"); (2) repeat-wrapped tiling (see
+ * `TERRAIN_DETAIL_NORMAL_REPEAT` above) so the detail reads as fine surface
+ * relief rather than one smooth stretch across the whole ground mesh.
+ * Resolves `"error"` (never throws) on a missing file or decode failure,
+ * same graceful-fallback contract as every other loader in this module --
+ * absent, the ground mesh falls back to its existing `computeVertexNormals`
+ * flat-normal plus vertex-color tier-banding path (Section 5.4 Fallback).
+ */
+export function useOptionalNormalTexture(
+  url: string | undefined,
+  loader: MinimalLoader<Texture> = defaultTextureLoader,
+): OptionalAssetState<Texture> {
+  return useOptionalAsset(
+    url,
+    loader,
+    (texture) => {
+      texture.colorSpace = NoColorSpace;
+      texture.wrapS = RepeatWrapping;
+      texture.wrapT = RepeatWrapping;
+      texture.repeat.set(TERRAIN_DETAIL_NORMAL_REPEAT, TERRAIN_DETAIL_NORMAL_REPEAT);
     },
     (texture) => texture.dispose(),
   );

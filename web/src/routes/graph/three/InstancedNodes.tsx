@@ -9,8 +9,10 @@ import { useThree } from "@react-three/fiber";
 import { Color, IcosahedronGeometry, MeshStandardMaterial, PlaneGeometry } from "three";
 import { InstancedMesh2 } from "@three.ez/instanced-mesh";
 import type { GraphColors } from "../../../lib/graph-colors";
+import { COMMUNITY_PATTERN_KINDS, communityPatternKind } from "../../../lib/communityGlyphs";
 import type { VizNode } from "../types";
 import { computeFitDistance, type GraphFitRequest } from "./CameraRig";
+import { createNodeMaterialUniforms, patchNodeMaterial } from "./nodeMaterialShader";
 
 export interface InstancedNodesHandle {
   /** Mutate instance positions from the latest worker tick -- called from Graph3DScene's single useFrame. */
@@ -41,6 +43,18 @@ export interface InstancedNodesProps {
    * caller (tests, `ModeSpikeView`) is unaffected.
    */
   transitionActive?: boolean;
+  /**
+   * Deep-Field Observatory Phase 4 (plan Section 5.3 "Safe-tier
+   * choreography" step 4 -- see `applySafeTierLod`'s doc comment above for
+   * the full scope rationale). `true` while the safe-tier degradation
+   * ladder (auto-driven by `PerformanceMonitor`, or a manual "Minimal"
+   * effects-tier selection, both owned by Graph3DScene.tsx/GraphView.tsx)
+   * has reached its LOD step -- forces every node to the cheapest flat-quad
+   * tier. Optional/defaults to `false` so every other caller (tests,
+   * `ModeSpikeView`) is unaffected, matching `transitionActive`'s own
+   * convention exactly.
+   */
+  safeTier?: boolean;
 }
 
 // LOD tiers (reflexion critique item 1 / ADR-0501 fitness criteria): a real
@@ -142,12 +156,81 @@ export function computeLodDistances(
   return { lod1, lod2 };
 }
 
+/**
+ * Deep-Field Observatory Phase 4 (plan Section 5.3 "Safe-tier choreography"
+ * step 4 / Section 6 Phase 4: "(4) LOD drops to the safe tier"). SCOPE NOTE:
+ * this is a deliberately narrow, additive touch to the pre-existing (P5-era,
+ * pre-Phase-2) LOD-threshold computation path ONLY -- this job's non-goals
+ * forbid touching Phase 2's node material/shader/badges/labels work
+ * elsewhere in this file, and this function/prop changes none of it. See
+ * `instancedNodesSafeTierLod.test.ts` for the full scope rationale.
+ *
+ * `computeLodDistances` above can only ever push thresholds OUT (its
+ * `Math.max(DEFAULT_LOD*_DISTANCE, ...)` floors), so a caller cannot force a
+ * MORE aggressive tier by feeding it a smaller fit -- this is the one
+ * legitimate seam to do that: when `safeTier` is true, collapse both
+ * thresholds to a near-zero pair (`lod1` 0, `lod2` a small positive
+ * epsilon), so every node -- at any real camera distance -- immediately
+ * selects the cheapest flat-quad tier, regardless of what the transition-
+ * suppression path above computed. Safe-tier degradation always wins over
+ * transition suppression when both are simultaneously requested (a rare
+ * edge case: an auto-degrade firing mid-transition), since dropping detail
+ * is strictly cheaper, never a correctness regression, in that overlap.
+ */
+export const SAFE_TIER_LOD_DISTANCE = 0.01;
+
+export function applySafeTierLod(distances: LodDistances, safeTier: boolean): LodDistances {
+  if (!safeTier) return distances;
+  return { lod1: 0, lod2: SAFE_TIER_LOD_DISTANCE };
+}
+
 function colorForNode(node: VizNode, colors: GraphColors): Color {
   if (node.kind === "entity") {
     return colors.community[node.community % colors.community.length]?.color ?? colors.node.entity.color;
   }
   const key = node.type as keyof GraphColors["node"];
   return colors.node[key]?.color ?? colors.node.concept.color;
+}
+
+/**
+ * Deep-Field Observatory Phase 2 (plan Section 5.6 item 1): the per-instance
+ * pattern-id fed into the second small data texture (`nodeMaterialShader.ts`
+ * / `initUniformsPerInstance` below) -- derived from `communityGlyphKind`
+ * (`lib/communityGlyphs.ts`, the SAME single source `CommunityBadge.tsx`/
+ * `GraphA11yTree.tsx`/the 2D fallback already use), so the in-canvas shader
+ * pattern can never disagree with the badge/legend/2D-fallback/a11y-tree
+ * non-color cue for the same community. Non-entity nodes (source/concept/
+ * session -- colored by TYPE, not community) always get "solid" (index 0,
+ * no luminance modulation in the shader) since they carry no community
+ * membership to encode a pattern for.
+ */
+export function patternIndexForNode(node: VizNode): number {
+  if (node.kind !== "entity") return 0;
+  return COMMUNITY_PATTERN_KINDS.indexOf(communityPatternKind(node.community));
+}
+
+/**
+ * Deep-Field Observatory Phase 2 (plan Section 5.2 "Components and states":
+ * "idle (... emissive 0 ...) / hover (emissive 0.6) / selected (emissive
+ * 1.0)"). Selected wins over hovered (a node can be both, e.g. re-hovering
+ * the currently-selected node) -- matches `InstancedNodes`' existing
+ * `isFocused`/dim-precedence convention below.
+ */
+export function computeEmissiveStrength(
+  isSelected: boolean,
+  isHovered: boolean,
+  params: { emissiveIdle: number; emissiveHover: number; emissiveSelected: number },
+): number {
+  if (isSelected) return params.emissiveSelected;
+  if (isHovered) return params.emissiveHover;
+  return params.emissiveIdle;
+}
+
+/** Deep-Field Observatory Phase 2 (plan Section 5.3 "Selection": "... plus size ..."). Tunable per Section 5.7's permitted variation. */
+export const SELECTED_NODE_SCALE_MULTIPLIER = 1.15;
+
+export function computeNodeScale(baseSize: number, isSelected: boolean): number {
+  return isSelected ? baseSize * SELECTED_NODE_SCALE_MULTIPLIER : baseSize;
 }
 
 export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesProps>(function InstancedNodes(
@@ -162,6 +245,7 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
     onSelectNode,
     fit = null,
     transitionActive = false,
+    safeTier = false,
   },
   ref,
 ) {
@@ -181,7 +265,25 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
   // "nodes render as tiny dark squares" bug: every instance was fully
   // correct in `colorsTexture` but then multiplied by (0,0,0). Community/
   // type colors flow from `colorForNode` -> `entity.color` only.
-  const material = useMemo(() => new MeshStandardMaterial({ roughness: 0.5 }), []);
+  //
+  // Deep-Field Observatory Phase 2 (plan Section 3.1 item 2 / Section 5.6
+  // item 1): `patchNodeMaterial` adds the fresnel rim/per-instance emissive/
+  // non-luminance outline/pattern-luminance shader patch -- still driven
+  // entirely by `colorsTexture` plus the second small `uniformsTexture`
+  // data texture below, NEVER `vertexColors`, so this documented bug stays
+  // fixed. `materialUniforms` is created ONCE (stable across re-renders) and
+  // shared BY REFERENCE into every LOD tier's separately-compiled program
+  // (see nodeMaterialShader.ts's file header) -- the effect further below
+  // mutates its `.value` fields whenever `colors.nodeMaterial`/
+  // `colors.pattern` change (a theme flip or a future token change), so a
+  // shader recompile is never needed for that.
+  const materialUniforms = useMemo(() => createNodeMaterialUniforms(), []);
+  const material = useMemo(() => {
+    const m = new MeshStandardMaterial({ roughness: 0.5 });
+    patchNodeMaterial(m, materialUniforms);
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const mesh = useMemo(() => {
     const capacity = Math.max(1, nodes.length);
@@ -191,9 +293,35 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
     // camera-fit geometry by the `updateAllLOD` effect below on every fit.
     m.addLOD(GEOMETRY_MID, material, DEFAULT_LOD1_DISTANCE);
     m.addLOD(GEOMETRY_FAR, material, DEFAULT_LOD2_DISTANCE);
+    // Deep-Field Observatory Phase 2 (Section 5.6 item 1): the per-instance
+    // pattern-id/emissive-drive data -- a SECOND small data texture in the
+    // SAME `SquareDataTexture` mechanism family `colorsTexture` itself uses
+    // (@three.ez/instanced-mesh's `uniformsTexture`), not a hand-rolled
+    // duplicate -- fetched entirely in the fragment shader (both fields are
+    // fragment-only, see nodeMaterialShader.ts), still ONE draw call. Must
+    // run before any `entity.setUniform(...)` call below (the library throws
+    // otherwise).
+    m.initUniformsPerInstance({ fragment: { patternId: "float", emissiveStrength: "float" } });
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [material, gl]);
+
+  // Deep-Field Observatory Phase 2 (Section 5.7 permitted variation: "exact
+  // numerics may be tuned ... provided they remain token-driven and
+  // both-theme-gated"): mirrors a theme/mode flip into the SHARED uniform
+  // objects above -- every already-compiled LOD program's live uniform
+  // updates without a recompile (see the `material`/`materialUniforms`
+  // comment above). Discrete (fires on `colors` identity change -- a theme
+  // flip via `subscribeGraphColors`, or a community-count/mode change),
+  // never per-frame.
+  useEffect(() => {
+    materialUniforms.uFresnelPower.value = colors.nodeMaterial.fresnelPower;
+    materialUniforms.uFresnelIntensity.value = colors.nodeMaterial.fresnelIntensity;
+    materialUniforms.uOutlineColor.value.copy(colors.nodeMaterial.outlineColor.color);
+    materialUniforms.uOutlineWidth.value = colors.nodeMaterial.outlineWidth;
+    materialUniforms.uPatternLuminanceDelta.value = colors.pattern.luminanceDelta;
+    materialUniforms.uPatternScale.value = colors.pattern.scale;
+  }, [materialUniforms, colors.nodeMaterial, colors.pattern]);
 
   useEffect(() => {
     return () => mesh.dispose();
@@ -210,9 +338,9 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
     const perspective = camera as unknown as { fov?: number; isPerspectiveCamera?: boolean };
     const fovDeg = perspective.isPerspectiveCamera && perspective.fov ? perspective.fov : 50;
     const distance = computeFitDistance(fit.radius, fovDeg);
-    const { lod1, lod2 } = computeLodDistances(distance, fit.radius, transitionActive);
+    const { lod1, lod2 } = applySafeTierLod(computeLodDistances(distance, fit.radius, transitionActive), safeTier);
     mesh.updateAllLOD([lod1, lod2]);
-  }, [mesh, camera, fit, transitionActive]);
+  }, [mesh, camera, fit, transitionActive, safeTier]);
 
   // Rebuild instances whenever the node set itself changes (data reload / filter
   // membership) -- NOT on every tick, and NOT via setState.
@@ -225,6 +353,15 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
       entity.scale.setScalar(node.size);
       entity.color = colorForNode(node, colors);
       entity.visible = visibleIds.has(node.id);
+      // Deep-Field Observatory Phase 2 (Section 5.6 item 1): pattern-id never
+      // depends on hover/select, so it's fully correct here at build time --
+      // the community <-> pattern mapping is fixed, shared with
+      // badges/2D-fallback/a11y-tree via `patternIndexForNode`. Emissive/
+      // scale start at their neutral defaults here (same division of labor
+      // as `entity.color`/`entity.opacity` above -- the recolor effect below
+      // runs immediately after, on the SAME `nodes` change, and corrects
+      // both against the current hover/select state).
+      entity.setUniform("patternId", patternIndexForNode(node));
       entity.updateMatrix();
     });
     idToIndex.current = map;
@@ -240,13 +377,27 @@ export const InstancedNodes = forwardRef<InstancedNodesHandle, InstancedNodesPro
       const entity = mesh.instances[index];
       if (!entity) continue;
       entity.visible = visibleIds.has(node.id);
-      const isFocused = selectedId === node.id || hoveredId === node.id;
+      const isSelected = selectedId === node.id;
+      const isHovered = hoveredId === node.id;
+      const isFocused = isSelected || isHovered;
       const isDimmed =
         (hoveredId !== null || selectedId !== null) &&
         !isFocused &&
         !neighborIds.has(node.id);
       entity.opacity = isDimmed ? 0.1 : 1;
       entity.color = colorForNode(node, colors);
+      // Deep-Field Observatory Phase 2 (Section 5.2/5.3 J-FOCUS): the
+      // per-instance emissive drive (idle/hover/selected) and the selected-
+      // node size emphasis -- `computeNodeScale` is a cheap no-op comparison
+      // for every non-(de)selecting node (see its own doc comment), so this
+      // never adds a meaningful per-node cost to a loop that already runs on
+      // every hover/select change.
+      entity.setUniform("emissiveStrength", computeEmissiveStrength(isSelected, isHovered, colors.nodeMaterial));
+      const targetScale = computeNodeScale(node.size, isSelected);
+      if (entity.scale.x !== targetScale) {
+        entity.scale.setScalar(targetScale);
+        entity.updateMatrix();
+      }
     }
   }, [mesh, nodes, colors, selectedId, hoveredId, neighborIds, visibleIds]);
 

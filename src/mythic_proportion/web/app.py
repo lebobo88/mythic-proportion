@@ -11,7 +11,6 @@ this *module* (or the rest of the package) never requires the optional
 """
 
 import json
-import os
 import shutil
 import tempfile
 from dataclasses import asdict
@@ -21,7 +20,13 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel
 
-from mythic_proportion.config import Settings, authhub_api_key, authhub_base_url, load_settings
+from mythic_proportion.compile.pipeline import check_compile_client
+from mythic_proportion.config import (
+    Settings,
+    authhub_api_key,
+    authhub_base_url,
+    load_settings,
+)
 from mythic_proportion.graph.communities import project_node_enrichment
 from mythic_proportion.graph.store import GraphStore
 from mythic_proportion.graph.tuples import normalize_title
@@ -68,6 +73,13 @@ ALLOWED_ORIGINS: frozenset[str] = frozenset(
         "http://localhost:8765",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        # The dev backend `scripts/dev.ps1` boots over ./dev-vault. In normal
+        # dev use the browser origin is 5173 (Vite proxies `/api` server-side
+        # and forwards the original Origin header), so these two forms matter
+        # only when someone opens the dev backend directly -- without them
+        # that hit would fail the CSRF origin check below for no good reason.
+        "http://127.0.0.1:8766",
+        "http://localhost:8766",
     }
 )
 
@@ -885,12 +897,9 @@ def create_app(vault_root: Path, settings: Settings | None = None) -> Any:
         # touches the cloud -- `has_api_key` reflects that (Ollama needs no
         # API key at all; it's a reachability question, not a credential
         # one, so we simply omit any cloud-key claim in that case).
-        if current_settings.local or current_settings.llm_provider == "ollama":
-            has_api_key = True
-        elif current_settings.llm_provider == "authhub":
-            has_api_key = bool(authhub_api_key())
-        else:
-            has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # Single source of truth, shared with the ingest preflight -- see
+        # `compile.pipeline.check_compile_client`.
+        has_api_key = check_compile_client(current_settings) is None
         # Browser-audit item 4 (trust finding): `local: true` overrides
         # routing to Ollama unconditionally (see
         # `query.engine._default_client`'s docstring -- that enforcement was

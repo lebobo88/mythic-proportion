@@ -63,6 +63,21 @@ export function isTransitionActive(state: ModeTransitionState | null, now: numbe
 }
 
 /**
+ * Deep-Field Observatory Phase 5 (plan Section 5.3 "Mode-transition
+ * cross-fade": chrome/fog ride the SAME 800ms `transitioning` envelope this
+ * module already governs for position blending -- never a second, new fade
+ * system). Single null-safe entry point for every per-mode-chrome/fog
+ * cross-fade call site: no in-flight transition (`state === null`) resolves
+ * to alpha 1 (fully settled on the current/incoming mode, nothing to blend),
+ * exactly matching `isTransitionActive(null, now)`'s own "no state = not
+ * active" contract above.
+ */
+export function resolveChromeCrossfadeAlpha(state: ModeTransitionState | null, now: number): number {
+  if (!state) return 1;
+  return transitionAlpha(state, now);
+}
+
+/**
  * Writes the blended (lerp'd) position for every id in `currentIds` into
  * `outBuffer` (caller-owned, reused -- no allocation on the hot per-tick
  * path, matching `Graph3DScene.tsx`'s existing zero-allocation tick

@@ -23,6 +23,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from mythic_proportion.compile.client import AnthropicCompileClient, CompileClient
@@ -247,9 +248,33 @@ def _default_client(settings: Settings) -> CompileClient:
             api_key=api_key,
             model=settings.llm_model,
             route_alias=settings.route_alias or None,
+            max_tokens=settings.llm_max_tokens,
+            timeout=settings.llm_timeout,
         )
 
     raise CompileError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")
+
+
+def check_compile_client(settings: Settings) -> str | None:
+    """``None`` if compile can run, else an actionable reason why it cannot.
+
+    Delegates to :func:`_default_client` rather than re-deriving credential
+    rules, so this can never drift from what compile actually does, and so a
+    caller (or test) that has swapped the client selection in is correctly
+    reported as ready. Constructing a client is cheap and never touches the
+    network: every provider SDK is imported lazily on first use.
+
+    This is the **ingest preflight**: ``ingest_drop`` records a content hash
+    in the dedup ledger before compile runs and never rolls it back, so
+    ingesting without a working LLM leaves sources ingested-but-uncompiled,
+    which a later re-drop reports as a duplicate rather than fixing. Checking
+    first leaves the files in ``drop/``, still retryable.
+    """
+    try:
+        _default_client(settings)
+    except CompileError as exc:
+        return str(exc)
+    return None
 
 
 def _append_log(vault_root: Path, lines: list[str]) -> None:
@@ -332,16 +357,40 @@ def compile_pending(
     *,
     client: CompileClient | None = None,
     settings: Settings | None = None,
+    on_start: Callable[[IngestedSource], None] | None = None,
+    on_result: Callable[[IngestedSource, CompileResult | None, Exception | None], None] | None = None,
 ) -> list[CompileResult]:
     """Compile every ingested-but-not-yet-compiled source found on disk.
 
     Reconstructs a minimal :class:`IngestedSource` from the ingest ledger and
     its staged parsed Markdown — useful when compile is triggered in a
     separate process/run from the original ``ingest_drop`` call.
+
+    **One failing source never aborts the batch** -- the same per-item
+    resilience ``ingest.pipeline.ingest_drop`` already guarantees. A source
+    that raises is reported through ``on_result`` and simply stays absent
+    from the :class:`CompiledLedger`, so the next run retries it; without
+    this, a single mid-batch failure (a flaky provider, one oversized
+    document) discarded every subsequent source's work.
+
+    ``on_start``/``on_result`` are optional progress callbacks so a caller
+    can report per-document status while the batch runs (the web
+    ``IngestWorker`` drives its per-file UI state from them). ``on_result``
+    receives exactly one of ``result``/``error`` as non-``None``.
     """
     vault_root = Path(vault_root)
     ingest_ledger = Ledger(vault_root / LEDGER_RELATIVE_PATH)
     compiled_ledger = CompiledLedger(vault_root / COMPILED_LEDGER_RELATIVE_PATH)
+
+    # Per-source failures are isolated below, but a *configuration* failure
+    # (no credential, egress disabled, bad Ollama URL) is not per-source: it
+    # would fail every single one identically. Raise it once, loudly, instead
+    # of reporting the same error N times through `on_result` and returning
+    # an empty list as though the work had merely produced nothing.
+    if client is None and any(
+        not compiled_ledger.already_compiled(h) for h, _ in ingest_ledger.items()
+    ):
+        _default_client(settings or load_settings(vault_root))
 
     results: list[CompileResult] = []
     for content_hash_value, entry in ingest_ledger.items():
@@ -367,6 +416,16 @@ def compile_pending(
             bytes=size,
             ingested_at=datetime.fromisoformat(entry["ingested_at"]),
         )
-        results.append(compile_source(vault_root, source, client=client, settings=settings))
+        if on_start is not None:
+            on_start(source)
+        try:
+            result = compile_source(vault_root, source, client=client, settings=settings)
+        except Exception as exc:  # noqa: BLE001 - one bad source must never abort the batch
+            if on_result is not None:
+                on_result(source, None, exc)
+            continue
+        results.append(result)
+        if on_result is not None:
+            on_result(source, result, None)
 
     return results

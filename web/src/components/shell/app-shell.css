@@ -5,6 +5,12 @@
 }
 
 .mp-app-shell-subheader {
+  /* T2 closeout fix (Section 5.1, 320px reflow finding 1): same
+     flex-column-child min-width mitigation as `.mp-app-shell-main` below --
+     without it this row (which now wraps via tab-nav.css) could still be
+     sized by its own content's intrinsic minimum rather than the shell's
+     actual available width. */
+  min-width: 0;
   padding: 0 var(--space-5);
   border-bottom: 1px solid var(--color-border);
   background-color: var(--color-bg);

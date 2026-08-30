@@ -179,3 +179,30 @@ export function neighborsOf(data: GraphData, nodeId: string): Set<string> {
   }
   return out;
 }
+
+/**
+ * Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 / Section 5.1
+ * J5-EDGE-WEIGHT): every edge touching `nodeId`, from the raw edge list, as
+ * the neighbor id plus THAT edge's own `weight`/`type` -- unlike
+ * `neighborsOf` above (a de-duplicated `Set<string>`, direction-agnostic but
+ * weight-blind), this is the shared source for the reading-pane Connections
+ * list (`GraphView.tsx`) AND the a11y links table's Weight column
+ * (`GraphA11yTree.tsx`), so the two surfaces can never disagree about a given
+ * connection's weight. Deliberately NOT de-duplicated by neighbor id: a
+ * multigraph with two distinct typed/weighted edges to the same neighbor
+ * surfaces as two separate connection rows, each with its own weight.
+ */
+export interface EdgeConnection {
+  neighborId: string;
+  weight?: number;
+  type?: string;
+}
+
+export function connectionsOf(data: GraphData, nodeId: string): EdgeConnection[] {
+  const out: EdgeConnection[] = [];
+  for (const edge of data.edges) {
+    if (edge.source === nodeId) out.push({ neighborId: edge.target, weight: edge.weight, type: edge.type });
+    else if (edge.target === nodeId) out.push({ neighborId: edge.source, weight: edge.weight, type: edge.type });
+  }
+  return out;
+}

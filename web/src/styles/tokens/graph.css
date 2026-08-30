@@ -94,6 +94,16 @@
   --graph-bloom-radius: 0.4;
   --graph-bloom-resolution-scale: 0.5;
 
+  /* Vignette (Phase 4 wires the EffectComposer pass alongside bloom, plan
+     Section 3.1 item 4/Section 5.9 Decision B). Not separately numerically
+     specified by Section 5.2's token list (only named as "selective bloom
+     plus vignette"); token-driven per Section 5.7's permitted variation
+     rather than hardcoded on the <Vignette> JSX. `offset`/`darkness` are
+     `@react-three/postprocessing`'s own Vignette effect parameter names.
+     Purely decorative framing, never a state carrier (Section 5.6 item 6). */
+  --graph-vignette-offset: 0.5;
+  --graph-vignette-darkness: 0.5;
+
   /* Edge weight encoding (Phase 3 wires the fat-line pass). Width in px,
      opacity 0-1; both interpolate independently of bloom per Section 5.6
      item 3. */
@@ -152,10 +162,19 @@
   --graph-cloud-nebula-color: oklch(0.3 0.06 280 / 0.5);
   --graph-cloud-nebula-opacity: 0.12;
 
-  /* Orbital. */
-  --graph-orbital-disc-color: oklch(0.35 0.05 250 / 0.4);
-  --graph-orbital-disc-opacity: 0.18;
-  --graph-orbital-ring-color: oklch(0.55 0.06 245 / 0.6);
+  /* Orbital. Round-6 escalation remediation (live runtime diagnostic):
+     at the real default settle framing the disc rendered #263c54 at 0.18
+     opacity over the near-black background -- technically present, too
+     low-contrast to read (it only became clearly visible dollied in to
+     ~807 units). Section 5.7 permitted variation (exact numerics tunable,
+     token-driven): disc lightness 0.35 -> 0.52 and opacity 0.18 -> 0.28 lift
+     it clear of the background while staying a translucent backdrop; ring
+     alpha 0.6 -> 0.75 with lightness 0.55 -> 0.66 because a 1-2px line loses
+     apparent alpha to antialiasing coverage. Light theme deliberately
+     untouched: the diagnostic evidence is dark-theme only. */
+  --graph-orbital-disc-color: oklch(0.52 0.06 250 / 0.4);
+  --graph-orbital-disc-opacity: 0.28;
+  --graph-orbital-ring-color: oklch(0.66 0.08 245 / 0.75);
   --graph-orbital-ring-width: 1.5;
   --graph-orbital-core-glow-color: oklch(0.8 0.1 240 / 0.7);
   --graph-orbital-core-glow-intensity: 0.8;
@@ -251,6 +270,12 @@
   --graph-bloom-intensity: 0.6;
   --graph-bloom-radius: 0.4;
   --graph-bloom-resolution-scale: 0.5;
+
+  /* Vignette -- see the dark-theme block above for the shared rationale;
+     numerically identical in both themes for now (no per-theme distinction
+     is specified anywhere in the plan), still token-driven per Section 5.7. */
+  --graph-vignette-offset: 0.5;
+  --graph-vignette-darkness: 0.5;
 
   --graph-edge-weight-width-min: 1;
   --graph-edge-weight-width-max: 4;

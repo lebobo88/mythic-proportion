@@ -40,6 +40,14 @@
   color: var(--color-danger);
 }
 
+/* Explains a "skipped as duplicate" count that nevertheless produced pages:
+   those sources were ingested earlier but never compiled. */
+.mp-ingest-note {
+  margin-top: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+}
+
 .mp-ingest-status-line {
   font-weight: 600;
 }

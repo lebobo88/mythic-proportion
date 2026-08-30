@@ -111,7 +111,27 @@ All four modes are worker force-configuration variants (`web/src/routes/graph/th
 
 Each mode has a matching 2D fallback (`Graph2DModeFallback.tsx`) and accessibility-tree view (`a11y/`): Orbital as nested community-grouped clusters with a color legend, Strata as per-level hierarchy groups nesting community sub-groups plus a populated links table, Terrain as region groups labeled by elevation tier and numeric elevation value. Both the 2D fallback and the accessibility tree consume the same shared grouping logic and color system as the 3D scene.
 
-Knowledge Terrain's optional chrome assets (`TerrainEnvironment.tsx`, `TerrainLandmarks.tsx`, `terrainAssetLoading.ts`, `terrainAssetManifest.ts`) live at `web/public/terrain/`: two equirectangular HDRI/skybox images, two neutral topographic matcap textures, and two landmark GLB models, all explicitly labeled placeholder, loaded via a non-throwing fallback path — Terrain mode is fully functional with zero of these assets present.
+Knowledge Terrain's optional chrome assets (`TerrainEnvironment.tsx`, `TerrainLandmarks.tsx`, `terrainAssetLoading.ts`, `terrainAssetManifest.ts`) live at `web/public/terrain/`: a refreshed dark-theme HDRI/skybox image, a new light-theme high-key HDRI (not yet wired as the light-theme default, pending contrast confirmation), two neutral topographic matcap textures, two landmark GLB models, and a terrain detail/hillshade normal map — seven assets total (`ASSET_MANIFEST.json`), up from six after `skybox-twilight.png` was removed to hold the plan's 2-HDRI cap. All are explicitly labeled placeholder, loaded via a non-throwing fallback path — Terrain mode is fully functional with zero of these assets present.
+
+### Node material, community identity, and labels
+
+The node instance material carries a `THREE.Material.onBeforeCompile` patch (`nodeMaterialShader.ts`) adding a fresnel-rim highlight plus a per-instance emissive value, sourced from a `colorsTexture` — deliberately never `vertexColors`, which black-multiplies against the base material color (a documented failure mode the patch explicitly avoids). This keeps the node layer a single draw call. A second small data texture carries a luminance-modulating pattern-id per node, giving community identity a non-hue cue alongside color, intended to keep communities distinguishable even at small on-screen sizes. An O(tens)-count community-centroid glyph/badge layer (`CommunityCentroidBadges.tsx`) marks each community's approximate center — implemented per Decision A (Section 5.9 of `docs/plans/mythic-proportion-3d-visual-enhancement.md`). Labels use a two-tier system (`NodeLabels.tsx`): a roughly 40-label total cap, with community titles winning under pressure over individual node labels, and node labels carrying a screen-space minimum size floor.
+
+### Edges and weight readout
+
+Edges render through a single batched fat-line pass (`InstancedEdges.tsx`, `edgeLineShader.ts`, the `Line2`/`LineMaterial` family), with both width and opacity driven by each edge's served weight (`edgeWeight.ts`). The same weight value is surfaced as text in the reading pane's Connections list and as a Weight column in the accessibility tree, both sourced from one shared formatter; an edge with no served weight falls back to `"weight: n/a"` rather than a blank or zero value.
+
+### Post-processing, effects tier, and per-mode chrome
+
+Selective bloom (on focus/selection) plus a vignette render through `@react-three/postprocessing`'s `EffectComposer` — a **new runtime dependency** (`web/package.json` gains `@react-three/postprocessing ^2.19.1`, confirmed compatible with the installed `@react-three/fiber ^8.17.10`/`three ^0.169.0` line; run `npm install` fresh after pulling this work). Bloom suppression composes off the existing mode-transition `transitioning` signal, restoring only after the far-tier LOD restore. A `PerformanceMonitor`-driven safe-tier degradation ladder (`safeTier.ts`) steps effects down under load in order: bloom → ambient freeze → chrome → LOD, with `aria-live` announcements. A toolbar "Graph detail" radiogroup (Auto/Full/Balanced/Minimal) exposes the same tiers as a user-facing control. Benchmarked at 10,000 nodes on the target RTX 3080 Ti host, the baseline, worst-case (Terrain/light-theme), and floor (Minimal) conditions all measured p50=10.0ms (100fps)/p95=10.1ms — comfortably inside the interactive performance target.
+
+Each mode also renders matching atmospheric chrome (`ModeChrome.tsx` and per-mode components): Cloud (`CloudNebula.tsx`) gets a static nebula haze; Orbital (`OrbitalChrome.tsx`, `OrbitalCoreGlow.tsx`) gets an ecliptic disc, community-shell rings grouped into roughly ten visual bands rather than one ring per community (for legibility at realistic community counts), and a core glow; Strata (`StrataChrome.tsx`, `StrataAxis.tsx`) gets graded floor planes with vertical edge-lit rim walls at each hierarchy level plus an etched labeled axis; Terrain gets hillshade shading, contour lines, and a theme-paired sky, including the Phase 1 light-theme structural node-darkening fix now visually present.
+
+The features above are implemented and independently verified by direct file/test inspection, but the following are not yet confirmed in a real browser and remain pending a final Browser Validator closeout pass: live keyboard/focus behavior of the effects control and the reading-pane Connections rows, in-browser legibility of community identity at small pixel sizes, visual seam quality of the generated HDRIs, and full responsive/viewport and reduced-motion/forced-colors behavior for these additions. See the root `HANDOFF.md` for current status.
+
+### Node deselection
+
+Selection can now be cleared without a full page reload: pressing Escape, clicking a close button on the reading pane, or clicking empty 3D-canvas space all correctly clear the current selection, with the camera never moving as a result.
 
 ### TabNav and keyboard navigation
 
@@ -326,7 +346,7 @@ npm run test
 npx vitest run
 ```
 
-Current baseline: 380 vitest tests across 42 test files, all passing. Vitest covers:
+Current baseline: 881 vitest tests across 79 test files, all passing. Vitest covers:
 - Component tests (`.test.tsx` files in `src/components/` and `src/routes/`)
 - Contrast audits (design token WCAG compliance, including the generated community ramp at 8/16/32 community counts)
 - Unit tests (lib functions, hooks, mode-transition and terrain-elevation logic)
@@ -335,19 +355,26 @@ Current baseline: 380 vitest tests across 42 test files, all passing. Vitest cov
 
 ## What's not built yet
 
-The frontend has no remaining scheduled work from the current plan. The
-deferred, unscheduled items are backend/product scope, not frontend gaps:
-an agent layer, an MCP server, a broader ComfyUI product asset pipeline
-beyond the Knowledge Terrain chrome-asset capture, and retirement of the
-legacy `/` single-page app. None of these are partially built; each needs
-its own planning pass before implementation begins.
+Plan 1 (`docs/plans/mythic-proportion-audit-fix-design.md`) is complete.
+Plan 2, "Deep-Field Observatory" (`docs/plans/mythic-proportion-3d-visual-enhancement.md`),
+has Phases 0–6 complete and independently verified; Phase 7 (closeout) is
+in progress — remaining work is a Browser Validator pass across viewports,
+both themes, reduced motion, and forced colors, plus applicable Codex judge
+checkpoints. See the root `HANDOFF.md` for current status; the plan
+document remains authoritative for exact scope.
+
+Beyond that, the deferred, unscheduled items are backend/product scope,
+not frontend gaps: an agent layer, an MCP server, a broader ComfyUI product
+asset pipeline beyond the Knowledge Terrain chrome-asset capture, and
+retirement of the legacy `/` single-page app. None of these are partially
+built; each needs its own planning pass before implementation begins.
 
 ## Key files
 
 | Path | Purpose |
 |------|---------|
 | `web/vite.config.ts` | Build config (base `/app`, outDir `static_next`) |
-| `web/package.json` | Dependencies (React, R3F, `@three.ez/instanced-mesh`, `d3-force-3d`, Radix UI, cmdk, culori) |
+| `web/package.json` | Dependencies (React, R3F, `@react-three/postprocessing`, `@three.ez/instanced-mesh`, `d3-force-3d`, Radix UI, cmdk, culori) |
 | `web/src/App.tsx` | Root component, hash router, active tab state |
 | `web/src/routes/*/` | Seven view components |
 | `web/src/routes/graph/three/` | 3D scene, instanced node/edge layers, force-layout worker client, mode forces, mode transition blend, terrain surface/environment/landmarks |
@@ -370,6 +397,7 @@ its own planning pass before implementation begins.
 - **Token reads** — graph-token reads (`getComputedStyle`) are batched on theme change, not per-render
 - **Single-draw-call node layer** — all four graph modes share one `InstancedMesh2` node layer with no per-node meshes, holding a single draw call at approximately 1,500 nodes and when stress-tested toward 10,000; a progressive-disclosure cap scales within that range. The physics worker owns layout for every mode so the main thread never blocks on simulation.
 - **Bounded transitions** — mode-switch transitions are capped at roughly 800ms and are interruptible, so rapid mode switching never queues up animation work.
+- **Safe-tier degradation** — a `PerformanceMonitor`-driven ladder (bloom → ambient freeze → chrome → LOD) and the user-facing "Graph detail" control keep post-processing from becoming a performance cliff; 10,000-node benchmarks on the target RTX 3080 Ti host measured p50=10.0ms (100fps)/p95=10.1ms across baseline, worst-case, and floor-tier conditions.
 
 ## Accessibility
 

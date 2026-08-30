@@ -240,7 +240,12 @@ describe("forceLayout.worker.ts mode branching (Phase 4a spike)", () => {
       expect(last).toBeLessThan(first * 1.25);
       expect(last).toBeGreaterThan(350);
       expect(last).toBeLessThan(410);
-    }, 20000);
+      // Round-8 timeout-only bump (no assertion/behavior change): the real
+      // d3-timer-driven settle takes well over the old 20s allowance when
+      // the full 72-file suite saturates an already-loaded CPU -- measured
+      // timing out under full-suite parallel load while passing every
+      // focused run, both before and after round-8's changes.
+    }, 120000);
 
     it("N=1500 (the production progressive-disclosure default): radius stays within 25% of its first-posted-tick value all the way to settle, AND lands within a tight absolute band around the independently re-measured Phase-3 baseline (~569 units)", async () => {
       const { endFired, first, last } = await settleRadii(1500, 4, 1);
@@ -249,7 +254,8 @@ describe("forceLayout.worker.ts mode branching (Phase 4a spike)", () => {
       expect(last).toBeLessThan(first * 1.25);
       expect(last).toBeGreaterThan(530);
       expect(last).toBeLessThan(610);
-    }, 20000);
+      // Round-8 timeout-only bump -- same note as the N=300 case above.
+    }, 120000);
   });
 
   it("every posted terrain-mode node position sits ON the same heightfield sampled at its own x/z (nodes 'ride the surface', not float above/through it)", async () => {

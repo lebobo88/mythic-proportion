@@ -113,6 +113,34 @@ describe("synthetic graph fixtures (dev-only large-scale loader)", () => {
       expect(ids.has(edge.target)).toBe(true);
     }
   });
+
+  // Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 / Section 10
+  // `browser_ui_validation`: "prefer a fixture with varied edge weights if
+  // the synthetic generator supports it"). DEV-ONLY test-fixture extension
+  // (labeled per this file's own header/assumptions convention) -- not
+  // production behavior; varies `edge.weight` deterministically so the
+  // fat-line width/opacity encoding and the "weight: n/a" fallback are both
+  // exercisable via `?syntheticGraph=N` without a live backend.
+  it("varies edge.weight deterministically (dev-fixture infra, plan Section 10) -- most edges carry a served weight, a minority deliberately carry none to exercise the 'weight: n/a' fallback", () => {
+    const graph = generateSyntheticGraph({ nodeCount: 500, avgDegree: 4, seed: 3 });
+    const weighted = graph.edges.filter((e) => typeof e.weight === "number");
+    const unweighted = graph.edges.filter((e) => e.weight === undefined);
+    expect(weighted.length).toBeGreaterThan(0);
+    expect(unweighted.length).toBeGreaterThan(0);
+    for (const edge of weighted) {
+      // Mirrors the assumed GraphRAG relationship-strength domain
+      // (edgeWeight.ts's EDGE_WEIGHT_DOMAIN_MIN/MAX) so the synthetic
+      // fixture exercises the same range real served data would.
+      expect(edge.weight).toBeGreaterThanOrEqual(1);
+      expect(edge.weight).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("edge.weight variation is deterministic for a given seed, same as every other synthetic field", () => {
+    const a = generateSyntheticGraph({ nodeCount: 500, avgDegree: 4, seed: 3 });
+    const b = generateSyntheticGraph({ nodeCount: 500, avgDegree: 4, seed: 3 });
+    expect(a.edges.map((e) => e.weight)).toEqual(b.edges.map((e) => e.weight));
+  });
 });
 
 describe("forceLayout worker: batched, worker-owned layout (structural budget)", () => {
@@ -182,12 +210,22 @@ describe("InstancedNodes: one InstancedMesh2 for the whole node set (not one mes
   });
 });
 
-describe("InstancedEdges: one batched LineSegments for the whole edge set", () => {
-  it("uses a single BufferGeometry/LineSegments, not one line object per edge", () => {
+// Deep-Field Observatory Phase 3 (plan Section 3.1 item 3 / Section 5.6 item
+// 3): the pre-Phase-3 1px-only `LineBasicMaterial`/plain `LineSegments`/
+// `BufferGeometry` pass was replaced by three's own fat-line technique
+// (`LineSegments2`/`LineSegmentsGeometry`/`LineMaterial`) so a served
+// `edge.weight` can drive width/opacity -- the underlying invariant this
+// describe block checks (one batched pass, never one line object per edge)
+// is unchanged; only the concrete three.js API surface is. See
+// instancedEdgesWeight.test.ts for the weight-wiring-specific assertions.
+describe("InstancedEdges: one batched fat-line pass for the whole edge set", () => {
+  it("uses a single LineSegmentsGeometry/LineSegments2, not one line object per edge", () => {
     const source = readSource("InstancedEdges.tsx");
-    const geometryConstructions = source.match(/new BufferGeometry\(/g) ?? [];
+    const geometryConstructions = source.match(/new LineSegmentsGeometry\(/g) ?? [];
     expect(geometryConstructions).toHaveLength(1);
-    expect(source).toMatch(/<lineSegments/);
+    const lineConstructions = source.match(/new LineSegments2\(/g) ?? [];
+    expect(lineConstructions).toHaveLength(1);
+    expect(source).toMatch(/<primitive object=\{line2\}/);
   });
 });
 
@@ -216,11 +254,11 @@ describe("LOD + edge culling (reflexion critique item 1)", () => {
     expect(addLodCalls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("InstancedEdges clamps the draw range to the visible edge count -- an actual GPU-side cull", () => {
+  it("InstancedEdges clamps the instanced draw to the visible edge count -- an actual GPU-side cull (Deep-Field Observatory Phase 3: instanceCount is the fat-line analog of the pre-Phase-3 setDrawRange clamp)", () => {
     const source = readSource("InstancedEdges.tsx");
-    expect(source).toMatch(/setDrawRange\(/);
+    expect(source).toMatch(/geometry\.instanceCount = /);
     // The cull must be based on the filtered/visible edge list, not the raw edge count.
-    expect(source).toMatch(/visible\.length \* 2/);
+    expect(source).toMatch(/geometry\.instanceCount = visible\.length/);
   });
 
   it("InstancedEdges no longer merely recolors hidden edges toward black as its only visibility mechanism", () => {
@@ -391,11 +429,20 @@ describe("progressive disclosure is the default + actually bounds GPU push (Issu
 // Issue 3c (BLOCKING): troika-three-text labels must be hard-capped --
 // never one Text mesh per node.
 describe("troika node labels are capped, never one-per-node (Issue 3c)", () => {
-  it("NodeLabels hard-caps the labeled set via a maxLabels budget, not one label per node", () => {
+  it("NodeLabels hard-caps the labeled set via a token-driven cap budget, not one label per node", () => {
     const source = readSource("NodeLabels.tsx");
-    expect(source).toMatch(/DEFAULT_MAX_LABELS = 40/);
+    // Deep-Field Observatory Phase 2 (plan Section 6 Phase 2): the fixed
+    // `DEFAULT_MAX_LABELS = 40`/`maxLabels` budget this test previously
+    // pinned literally has been superseded by the two-tier label system --
+    // the SAME ~40 cap now lives as the token-driven default in
+    // `lib/graph-colors.ts`'s `DEFAULT_LABEL_TIER_PARAMS`/`--graph-label-cap`
+    // (see graph-colors.test.ts), consumed here via `colors.labelTier.cap`,
+    // with community titles winning it first (`selectLabelTiers`). This
+    // still hard-caps the labeled node set, still never renders one label
+    // per node -- only how the cap is sourced/computed changed.
+    expect(source).toMatch(/labelTier\.cap/);
     expect(source).toMatch(/labeledNodes/);
-    expect(source).toMatch(/out\.slice\(0, maxLabels\)/);
+    expect(source).toMatch(/out\.slice\(0, nodeLabelBudget\)/);
     // No naive "one <Text> per node" render path.
     expect(source).not.toMatch(/nodes\.map\(\(node\) => <Text/);
   });

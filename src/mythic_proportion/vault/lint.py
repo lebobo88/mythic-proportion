@@ -82,6 +82,14 @@ class ThinPage:
     char_count: int
 
 
+@dataclass(frozen=True)
+class UncompiledSource:
+    """A source in the ingest ledger with no compiled-ledger entry."""
+
+    original_name: str
+    content_hash: str
+
+
 @dataclass
 class LintReport:
     """Everything :func:`lint_vault` found, plus a nonzero-exit-code signal."""
@@ -90,11 +98,22 @@ class LintReport:
     dangling_links: list[DanglingLink] = field(default_factory=list)
     stale_index_entries: list[StaleIndexEntry] = field(default_factory=list)
     thin_pages: list[ThinPage] = field(default_factory=list)
+    #: Sources recorded in the ingest ledger with no entry in the compiled
+    #: ledger: ingested, parsed, staged -- but never turned into a wiki page.
+    #: Invisible before this check: the vault simply looked empty, while
+    #: re-dropping the same files reported them as duplicates.
+    uncompiled_sources: list[UncompiledSource] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         """``True`` iff every check came back clean."""
-        return not (self.orphans or self.dangling_links or self.stale_index_entries or self.thin_pages)
+        return not (
+            self.orphans
+            or self.dangling_links
+            or self.stale_index_entries
+            or self.thin_pages
+            or self.uncompiled_sources
+        )
 
     @property
     def exit_code(self) -> int:
@@ -122,6 +141,15 @@ class LintReport:
         if self.thin_pages:
             lines.append(f"\nThin/empty pages ({len(self.thin_pages)}):")
             lines.extend(f"  - [[{t.title}]] ({t.path}, {t.char_count} chars)" for t in self.thin_pages)
+        if self.uncompiled_sources:
+            lines.append(
+                f"\nIngested but never compiled ({len(self.uncompiled_sources)}) -- "
+                "these sources have no wiki page, and re-dropping the same file "
+                "will be reported as a duplicate. Fix: mythic compile <vault>"
+            )
+            lines.extend(
+                f"  - {u.original_name} ({u.content_hash[:12]})" for u in self.uncompiled_sources
+            )
         return "\n".join(lines)
 
 
@@ -227,6 +255,28 @@ def _lint_stale_index(vault_root: Path, pages: list[_PageInfo]) -> list[StaleInd
     return stale
 
 
+def _lint_uncompiled_sources(vault_root: Path) -> list[UncompiledSource]:
+    """Sources in the ingest ledger that never made it into the compiled ledger.
+
+    Read-only, and lazy about its imports for the same reason the rest of this
+    module is: `lint` must stay usable without the compile stack configured.
+    """
+    from mythic_proportion.compile.pipeline import COMPILED_LEDGER_RELATIVE_PATH, CompiledLedger
+    from mythic_proportion.ingest.dedup import Ledger
+    from mythic_proportion.ingest.pipeline import LEDGER_RELATIVE_PATH
+
+    ingest_ledger_path = vault_root / LEDGER_RELATIVE_PATH
+    if not ingest_ledger_path.is_file():
+        return []
+
+    compiled = CompiledLedger(vault_root / COMPILED_LEDGER_RELATIVE_PATH)
+    return [
+        UncompiledSource(original_name=entry.get("original_name", "<unknown>"), content_hash=h)
+        for h, entry in Ledger(ingest_ledger_path).items()
+        if not compiled.already_compiled(h)
+    ]
+
+
 def lint_vault(vault_root: Path, *, thin_page_min_chars: int = THIN_PAGE_MIN_CHARS) -> LintReport:
     """Run every Phase 5 health check over ``vault_root`` and return a report.
 
@@ -238,11 +288,13 @@ def lint_vault(vault_root: Path, *, thin_page_min_chars: int = THIN_PAGE_MIN_CHA
     orphans, dangling = _lint_orphans_and_dangling(pages)
     thin_pages = _lint_thin_pages(pages, min_chars=thin_page_min_chars)
     stale = _lint_stale_index(vault_root, pages)
+    uncompiled = _lint_uncompiled_sources(vault_root)
     return LintReport(
         orphans=orphans,
         dangling_links=dangling,
         stale_index_entries=stale,
         thin_pages=thin_pages,
+        uncompiled_sources=uncompiled,
     )
 
 
