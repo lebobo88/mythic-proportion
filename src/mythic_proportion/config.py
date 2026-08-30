@@ -104,6 +104,21 @@ class Settings(BaseSettings):
     #: Optional AuthHub routing hint, forwarded as ``route_alias`` in the
     #: request body only when non-empty.
     route_alias: str | None = None
+    #: Completion-token budget sent to the AuthHub/Ollama chat endpoints.
+    #: Deliberately generous: a *reasoning* model (e.g. ``deepseek-v4-flash``)
+    #: spends completion tokens on internal reasoning before it emits any
+    #: visible content, so the previous hardcoded 4096 was consumed entirely
+    #: by reasoning and the response came back with ``finish_reason="length"``
+    #: and an EMPTY ``content`` -- which surfaced only as an opaque
+    #: "no '{' found in content" JSON error. Override with
+    #: ``MYTHIC_LLM_MAX_TOKENS``.
+    llm_max_tokens: int = 16384
+    #: Per-request HTTP timeout (seconds) for the AuthHub chat endpoint. The
+    #: old hardcoded 60s was tuned for a fast non-reasoning model on a small
+    #: prompt; a reasoning model compiling a large source document routinely
+    #: needs several minutes, and the timeout surfaced as a whole-document
+    #: compile failure. Override with ``MYTHIC_LLM_TIMEOUT``.
+    llm_timeout: float = 300.0
 
 
 def effective_allow_egress(settings: Settings) -> bool:

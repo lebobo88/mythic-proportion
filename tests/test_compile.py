@@ -374,3 +374,102 @@ def test_lint_zero_broken_links_after_golden_compile(tmp_path: Path) -> None:
         _fm, body = parse_page(md_path.read_text(encoding="utf-8"))
         for link in extract_links(body):
             assert link.lower() in all_titles, f"dangling link {link!r} in {md_path}"
+
+
+# --------------------------------------------------------------------------
+# compile_pending: per-source resilience and progress reporting
+# --------------------------------------------------------------------------
+
+
+def test_compile_pending_one_failing_source_does_not_abort_the_batch(tmp_path: Path) -> None:
+    """A mid-batch failure must not discard every later source's work.
+
+    Regression test: `compile_pending` used to let the first exception
+    propagate, so one flaky document (a provider timeout on an oversized
+    source) threw away the whole run. The failed source simply stays out of
+    the CompiledLedger and is retried next time.
+    """
+    vault = _seed_vault(tmp_path)
+    _make_source(vault, "good-one.json", b'{"a": 1}')
+    _make_source(vault, "bad.json", b'{"b": 2}')
+    _make_source(vault, "good-two.json", b'{"c": 3}')
+
+    seen: list[str] = []
+
+    def _fixture(prompt) -> CompileResult:
+        seen.append(prompt.source_hash)
+        if len(seen) == 2:  # fail exactly one, mid-batch
+            raise CompileError("simulated provider timeout")
+        return CompileResult(pages=[WikiPage.new(page_type="source", title=f"P{len(seen)}", body="body")])
+
+    client = FakeCompileClient(_fixture)
+    errors: list[Exception] = []
+    results = compile_pending(
+        vault,
+        client=client,
+        settings=_settings(vault),
+        on_result=lambda source, result, error: errors.append(error) if error else None,
+    )
+
+    assert len(seen) == 3, "every source must be attempted"
+    assert len(results) == 2
+    assert len(errors) == 1
+
+    # The failed source is still pending, so a later run retries it.
+    ledger = CompiledLedger(vault / ".vault-meta" / "compiled.json")
+    assert sum(1 for h in _ingest_hashes(vault) if not ledger.already_compiled(h)) == 1
+
+
+def test_compile_pending_reports_progress_through_callbacks(tmp_path: Path) -> None:
+    """`on_start`/`on_result` drive the web UI's per-file status."""
+    vault = _seed_vault(tmp_path)
+    _make_source(vault, "only.json", b'{"a": 1}')
+
+    started: list[str] = []
+    finished: list[tuple[str, int]] = []
+
+    client = FakeCompileClient(
+        lambda prompt: CompileResult(pages=[WikiPage.new(page_type="source", title="T", body="b")])
+    )
+    compile_pending(
+        vault,
+        client=client,
+        settings=_settings(vault),
+        on_start=lambda source: started.append(source.original_name),
+        on_result=lambda source, result, error: finished.append(
+            (source.original_name, len(result.pages) if result else -1)
+        ),
+    )
+
+    assert started == ["only.json"]
+    assert finished == [("only.json", 1)]
+
+
+def _ingest_hashes(vault: Path) -> list[str]:
+    from mythic_proportion.ingest.dedup import Ledger
+
+    return [h for h, _ in Ledger(vault / ".vault-meta" / "ingested.json").items()]
+
+
+def test_parse_tool_input_rejects_a_response_with_no_pages_key() -> None:
+    """A wrong-shaped response must fail loudly, not compile zero pages.
+
+    This is the most dangerous of the failure modes it replaces: silently
+    returning an empty CompileResult made `compile_source` write no pages,
+    record the source as compiled, and leave the vault looking empty with no
+    error anywhere -- unrecoverable without hand-editing the ledger.
+    """
+    from mythic_proportion.compile.client import _parse_tool_input
+
+    with pytest.raises(CompileError) as excinfo:
+        _parse_tool_input({"name": "emit_wiki_pages", "unexpected": {}})
+    assert "no 'pages' key" in str(excinfo.value)
+
+
+def test_parse_tool_input_accepts_a_legitimately_empty_page_list() -> None:
+    """An explicit empty `pages` list is a real answer, not a malformed one."""
+    from mythic_proportion.compile.client import _parse_tool_input
+
+    result = _parse_tool_input({"pages": [], "contradictions": ["nothing usable"]})
+    assert result.pages == []
+    assert result.contradictions == ["nothing usable"]

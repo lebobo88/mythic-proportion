@@ -302,3 +302,102 @@ def test_missing_httpx_raises_actionable_error(monkeypatch) -> None:
     client = AuthHubCompileClient(base_url="http://localhost:3000", api_key="ak_x", model="m")
     with pytest.raises(CompileError, match="pip install"):
         client.compile(_compile_prompt())
+
+
+# --------------------------------------------------------------------------
+# Reasoning-model / tool-envelope regressions
+#
+# All four of these were hit in production against a real gateway serving
+# `deepseek-v4-flash`, and together they produced a vault that ingested 18
+# documents and rendered zero pages.
+# --------------------------------------------------------------------------
+
+
+def test_extract_json_object_unwraps_tool_call_envelope() -> None:
+    """`{"name": ..., "arguments": {...}}` yields the arguments, not the envelope.
+
+    The shared compile prompt tells the model to answer via an
+    `emit_wiki_pages` tool call -- correct for the Anthropic tool-use client,
+    impossible on this endpoint. A strong instruction-follower obeys it
+    anyway; without unwrapping, `_parse_tool_input` saw no "pages" key and
+    compiled zero pages.
+    """
+    data = extract_json_object('{"name": "emit_wiki_pages", "arguments": {"pages": [{"title": "T"}]}}')
+    assert data == {"pages": [{"title": "T"}]}
+
+
+def test_extract_json_object_unwraps_function_call_syntax() -> None:
+    """`emit_wiki_pages({...})` -- not even valid JSON at position 0."""
+    data = extract_json_object('emit_wiki_pages({"pages": [{"title": "U"}], "contradictions": []})')
+    assert data["pages"] == [{"title": "U"}]
+
+
+def test_extract_json_object_unwraps_stringified_arguments() -> None:
+    """Some models stringify the arguments object rather than nesting it."""
+    data = extract_json_object('{"name": "emit_wiki_pages", "arguments": "{\\"pages\\": [{\\"title\\": \\"V\\"}]}"}')
+    assert data == {"pages": [{"title": "V"}]}
+
+
+def test_extract_json_object_leaves_a_plain_object_alone() -> None:
+    """A well-formed response must not be mistaken for an envelope."""
+    data = extract_json_object('{"pages": [{"title": "W"}], "contradictions": ["c"]}')
+    assert data == {"pages": [{"title": "W"}], "contradictions": ["c"]}
+
+
+def test_compile_client_raises_actionable_error_on_empty_content(monkeypatch) -> None:
+    """A reasoning model that spends the whole budget before emitting anything.
+
+    `finish_reason="length"` with empty content used to surface several
+    frames away as an opaque "no '{' found in content" JSONDecodeError. The
+    error must instead name the cause and the knob that fixes it.
+    """
+    payload = {
+        "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+        "usage": {"completion_tokens": 4096},
+    }
+    monkeypatch.setattr(httpx, "post", lambda url, **kwargs: _FakeResponse(payload=payload))
+
+    client = AuthHubCompileClient(
+        base_url="http://gateway.invalid", api_key="k", model="deepseek-v4-flash", max_retries=0
+    )
+    with pytest.raises(CompileError) as excinfo:
+        client.compile(_compile_prompt())
+
+    message = str(excinfo.value)
+    assert "empty content" in message
+    assert "MYTHIC_LLM_MAX_TOKENS" in message
+    assert "no '{' found" not in message
+
+
+def test_compile_client_json_directive_countermands_the_tool_instruction(monkeypatch) -> None:
+    """The system prompt orders a tool call; this endpoint has no tool API."""
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url, **kwargs: Any):
+        captured["body"] = kwargs["json"]
+        return _FakeResponse(payload=_chat_payload('{"pages": [], "contradictions": []}'))
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    AuthHubCompileClient(
+        base_url="http://gateway.invalid", api_key="k", model="m"
+    ).compile(_compile_prompt())
+
+    system = captured["body"]["messages"][0]["content"]
+    assert "NO tool" in system
+    assert "emit_wiki_pages" in system
+
+
+def test_max_tokens_is_configurable(monkeypatch) -> None:
+    """The 4096 default was a hardcoded cap; reasoning models need far more."""
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url, **kwargs: Any):
+        captured["body"] = kwargs["json"]
+        return _FakeResponse(payload=_chat_payload('{"pages": [], "contradictions": []}'))
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    AuthHubCompileClient(
+        base_url="http://gateway.invalid", api_key="k", model="m", max_tokens=32768
+    ).compile(_compile_prompt())
+
+    assert captured["body"]["max_tokens"] == 32768

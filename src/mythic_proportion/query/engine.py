@@ -197,6 +197,8 @@ def _default_client(settings: Settings) -> AnswerClient:
             api_key=api_key,
             model=settings.llm_model,
             route_alias=settings.route_alias or None,
+            max_tokens=settings.llm_max_tokens,
+            timeout=settings.llm_timeout,
         )
 
     raise AnswerError(f"LLM not configured: unknown llm_provider {settings.llm_provider!r}")

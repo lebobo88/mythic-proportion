@@ -158,9 +158,14 @@ def test_cold_start_e2e_reports_clean_errors_with_no_provider_configured(
     """The same cold-start flow, but relying on automatic client selection
     (no injected fake clients) with no AUTHHUB_API_KEY/ANTHROPIC_API_KEY set.
     Per the "LLM required" contract, compile and query no longer degrade:
-    ingest still exits 0 with a clean per-source compile error (no stub page
-    written), and `query` exits 1 with an actionable error, never a
-    traceback. Reindex/lint remain fully offline and unaffected."""
+    `ingest --compile` refuses up front (exit 1) and leaves the dropped file
+    untouched in `drop/`, and `query` exits 1 with an actionable error, never
+    a traceback. Reindex/lint remain fully offline and unaffected.
+
+    Ingest refuses rather than half-completing because `ingest_drop` records
+    a content hash in the dedup ledger before compile runs and never rolls it
+    back: ingesting here would leave a source with no page that a later
+    re-drop reports as a duplicate."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("AUTHHUB_API_KEY", raising=False)
 
@@ -171,15 +176,16 @@ def test_cold_start_e2e_reports_clean_errors_with_no_provider_configured(
     (vault / "drop" / "notes.json").write_text('{"key": "value"}', encoding="utf-8")
 
     result = runner.invoke(app, ["ingest", str(vault)])
-    assert result.exit_code == 0, result.output
-    assert "Ingested: 1" in result.output
-    assert "Compiling: 1" in result.output
+    assert result.exit_code == 1, result.output
     assert "AUTHHUB_API_KEY" in result.output
     assert "Traceback" not in result.output
 
-    # No page was written for the failed compile.
-    stub_pages = list((vault / "wiki" / "sources").glob("*.md"))
-    assert len(stub_pages) == 0
+    # Nothing was consumed or written: the drop file is still there, and no
+    # ledger entry exists to make a later re-drop look like a duplicate.
+    assert (vault / "drop" / "notes.json").is_file()
+    assert not (vault / ".vault-meta" / "ingested.json").is_file()
+    assert list((vault / "wiki" / "sources").glob("*.md")) == []
+
 
     result = runner.invoke(app, ["reindex", "--vault", str(vault)])
     assert result.exit_code == 0, result.output
@@ -193,3 +199,16 @@ def test_cold_start_e2e_reports_clean_errors_with_no_provider_configured(
     result = runner.invoke(app, ["lint", str(vault)])
     assert result.exit_code == 0, result.output
     assert "clean" in result.output.lower()
+
+    # `--no-compile` still ingests -- it never promises a page. That legitimately
+    # creates an ingested-but-uncompiled source, and `lint` must now surface it:
+    # this is the state that used to be invisible (vault looks empty, re-dropping
+    # the file reports "duplicate"), so it is a reported condition, not silence.
+    result = runner.invoke(app, ["ingest", str(vault), "--no-compile"])
+    assert result.exit_code == 0, result.output
+    assert "Ingested: 1" in result.output
+
+    result = runner.invoke(app, ["lint", str(vault)])
+    assert result.exit_code == 1, result.output
+    assert "Ingested but never compiled (1)" in result.output
+    assert "mythic compile" in result.output

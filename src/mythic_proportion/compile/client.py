@@ -83,6 +83,18 @@ class FakeCompileClient:
 
 
 def _parse_tool_input(data: dict[str, Any]) -> CompileResult:
+    # A response with no "pages" key at all is a malformed/unexpected shape
+    # (e.g. an unrecognised tool-call envelope), NOT a legitimate "this
+    # source yielded nothing". Silently returning an empty CompileResult
+    # there is worse than failing: `compile_source` would write zero wiki
+    # pages, record the source in the CompiledLedger as done, and leave the
+    # vault looking empty with no error anywhere -- unrecoverable without
+    # hand-editing the ledger. Fail loudly instead.
+    if "pages" not in data:
+        raise CompileError(
+            "LLM response had no 'pages' key -- unexpected response shape "
+            f"(top-level keys: {sorted(data)})"
+        )
     pages = []
     for raw_page in data.get("pages", []):
         page_type = raw_page["page_type"]

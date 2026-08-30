@@ -56,10 +56,8 @@ mythic lint ./my-vault
 mythic watch ./my-vault
 
 # Optional: run the local web UI (requires: pip install 'mythic-proportion[web]').
-# The React frontend at /app is not committed to the repo -- build it once
-# per checkout before serving (see "Web UI" below):
-cd web && npm install && npm run build && cd ..
-mythic serve --vault ./my-vault
+# One command builds the frontend if needed and serves ./my-vault:
+./scripts/prod.sh    # Git Bash; or  .\scripts\prod.ps1  in PowerShell
 
 # List all seven public commands (plus two hidden utility commands):
 mythic --help
@@ -69,8 +67,33 @@ Open `./my-vault` directly in Obsidian — see `docs/obsidian.md`.
 
 ## Web UI
 
-`mythic serve --vault ./my-vault` starts a local FastAPI server at
-`http://127.0.0.1:8765/` by default (override with `--host`/`--port`; pass
+### Launching
+
+Two one-command launchers wrap the whole stack. They are safe to run at the
+same time -- different ports, different vaults, so testing never touches your
+real notes:
+
+| | Open | Backend | Vault |
+| --- | --- | --- | --- |
+| `./scripts/prod.sh` | `http://127.0.0.1:8765/app/` | `:8765` | `./my-vault` |
+| `./scripts/dev.sh` | `http://localhost:5173/app/` | `:8766` (proxied) | `./dev-vault` |
+
+From PowerShell, call `.\scripts\prod.ps1` / `.\scripts\dev.ps1` directly --
+the `.sh` files are thin Git Bash wrappers around them. `make prod` / `make dev`
+also work if you have GNU make installed; it is not required.
+
+- **prod** (`scripts/prod.ps1`) activates `.venv`, rebuilds the
+  frontend only when it is stale, and serves your real vault. Flags:
+  `-SkipBuild`, `-NoBrowser`, `-Port`, `-Vault`, `-Force` (free a busy port).
+- **dev** (`scripts/dev.ps1`) creates `./dev-vault` on first run
+  (seeded from `demo-vault`; `-Empty` to skip), starts the backend over it,
+  and runs Vite with hot reload. Vite proxies `/api` to the dev backend (see
+  `web/vite.config.ts`), so the frontend is fully live. Ctrl+C stops both
+  processes, leaving no orphans. Flags: `-Force`, `-Empty`, `-Port`,
+  `-ApiPort`, `-Vault`.
+
+Under the hood, `mythic serve --vault ./my-vault` starts a local FastAPI
+server at `http://127.0.0.1:8765/` by default (override with `--host`/`--port`; pass
 `--no-browser` to skip auto-opening it). It serves two frontends side by
 side, wrapping the exact same building blocks the CLI uses:
 
@@ -143,14 +166,31 @@ hierarchy groups with a populated links table for Strata, elevation-tier
 region groups for Terrain), all driven by the same shared grouping logic and
 color system as the 3D scene, so the two representations stay in agreement.
 
-Knowledge Terrain ships optional placeholder chrome assets — two
-equirectangular HDRI/skybox images, two neutral topographic matcap
-textures, and two low-poly landmark models — at `web/public/terrain/`
-(manifest at `web/public/terrain/ASSET_MANIFEST.json`, documenting
-generation parameters for reproducibility). Terrain mode is fully
-functional with none of these assets present: they load via a
-non-throwing fallback path and never break the 3D scene if missing, and
-they are explicitly labeled placeholder, not production-ready.
+Each mode also carries ACES-tone-mapped lighting, selective bloom on
+focus/selection, and a matching atmospheric "chrome" treatment — Cloud gets
+a nebula haze; Orbital gets an ecliptic disc, community-shell rings, and a
+core glow; Strata gets graded floor planes with edge-lit rim walls and an
+etched axis; Terrain gets hillshade shading, contour lines, and a
+theme-paired sky. A toolbar "Graph detail" control (Auto/Full/Balanced/
+Minimal) lets these effects scale down for performance. Edges render with
+weight-driven width and opacity, with the same weight value surfaced in the
+reading pane's Connections list and the accessibility tree's Weight column.
+Node selection clears via Escape, a close button on the reading pane, or a
+click on empty canvas space, without moving the camera.
+
+Knowledge Terrain ships optional placeholder chrome assets — a refreshed
+dark-theme equirectangular HDRI/skybox image, a new light-theme high-key
+HDRI (not yet the light-theme default, pending contrast confirmation),
+two neutral topographic matcap textures, two low-poly landmark models,
+and a terrain detail/hillshade normal map (seven assets total) — at
+`web/public/terrain/` (manifest at
+`web/public/terrain/ASSET_MANIFEST.json`, documenting generation
+parameters for reproducibility). The dark-theme HDRI also drives
+image-based lighting, theme-gated so it is never active in light theme.
+Terrain mode is fully functional with none of these assets present: they
+load via a non-throwing fallback path and never break the 3D scene if
+missing, and they are explicitly labeled placeholder, not
+production-ready.
 
 ### Enriched graph data
 
@@ -261,8 +301,8 @@ npm run build
 make check
 ```
 
-Current baselines: 419 pytest tests across 30 files, all passing; 380
-vitest tests across 42 files, all passing; ruff and mypy clean; `tsc
+Current baselines: 419 pytest tests across 30 files, all passing; 881
+vitest tests across 79 files, all passing; ruff and mypy clean; `tsc
 --noEmit` clean; `npm run build` succeeds (one non-blocking bundle-size
 advisory for a chunk over 500kB, not a build error).
 

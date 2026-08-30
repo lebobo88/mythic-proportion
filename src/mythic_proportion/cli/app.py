@@ -33,12 +33,13 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from mythic_proportion.compile.models import CompileError
-from mythic_proportion.compile.pipeline import compile_source
-from mythic_proportion.config import load_settings
+from mythic_proportion.compile.models import CompileResult
+from mythic_proportion.compile.pipeline import check_compile_client, compile_pending
+from mythic_proportion.config import Settings, load_settings
 from mythic_proportion.harness_ingest import DEFAULT_FABLE_ARTIFACT_LIMIT, ingest_harness
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.store import IndexStore
+from mythic_proportion.ingest.models import IngestedSource
 from mythic_proportion.ingest.pipeline import ingest_drop
 from mythic_proportion.query.client import AnswerError
 from mythic_proportion.query.engine import answer_query
@@ -69,6 +70,70 @@ def init(
     console.print(f"[green]Vault initialized at {Path(vault_path).resolve()}[/green]")
 
 
+def _compile_pending_with_progress(root: Path, settings: Settings) -> None:
+    """Compile every ingested-but-uncompiled source, printing per-document progress."""
+
+    def on_start(source: IngestedSource) -> None:
+        console.print(f"  ~ compiling {escape(source.original_name)}...")
+
+    def on_result(
+        source: IngestedSource,
+        result: CompileResult | None,
+        error: Exception | None,
+    ) -> None:
+        if error is not None:
+            console.print(f"  ! {source.original_name}: {error}", markup=False)
+            return
+        assert result is not None
+        console.print(
+            f"  ~ {escape(source.original_name)} -> {len(result.pages)} page(s), "
+            f"{len(result.contradictions)} contradiction(s), {len(result.links_created)} stub link(s)"
+        )
+
+    results = compile_pending(root, settings=settings, on_start=on_start, on_result=on_result)
+    console.print(f"[green]Compiled:[/green] {len(results)}")
+
+
+def _preflight_llm_or_exit(root: Path) -> Settings:
+    """Refuse to ingest when the active provider has no usable credential.
+
+    `ingest_drop` records a content hash in the dedup ledger BEFORE compile
+    runs and never rolls it back, so ingesting without an LLM leaves files
+    ingested-but-uncompiled -- and re-dropping them is then a no-op
+    "duplicate". Failing here leaves them in `drop/`, still retryable.
+    """
+    settings = load_settings(root)
+    problem = check_compile_client(settings)
+    if problem is not None:
+        console.print(
+            f"[red]Refusing to ingest with --compile: {problem}.[/red] "
+            "Your files were left in drop/ untouched. Configure a credential and re-run, "
+            "or pass --no-compile to ingest without compiling."
+        )
+        raise typer.Exit(code=1)
+    return settings
+
+
+@app.command("compile")
+def compile_cmd(
+    vault_path: Optional[Path] = typer.Argument(
+        None, help="Vault to compile (defaults to the current directory)."
+    ),
+) -> None:
+    """Compile every ingested-but-not-yet-compiled source into wiki pages.
+
+    The repair verb for a half-finished ingest: because `ingest` records a
+    file in the dedup ledger before compiling it, a compile that failed (no
+    API key, provider outage) leaves the source ingested with no page, and
+    re-dropping the same file is correctly reported as a duplicate. This
+    compiles those stranded sources from the parsed Markdown already staged
+    in the vault -- no re-upload needed.
+    """
+    root = Path(vault_path) if vault_path is not None else Path.cwd()
+    settings = _preflight_llm_or_exit(root)
+    _compile_pending_with_progress(root, settings)
+
+
 @app.command()
 def ingest(
     vault_path: Optional[Path] = typer.Argument(
@@ -78,17 +143,21 @@ def ingest(
         True,
         "--compile/--no-compile",
         help=(
-            "Compile newly ingested sources into wiki pages after ingest, using "
-            "the configured LLM provider (AuthHub by default; requires "
-            "AUTHHUB_API_KEY). A missing/misconfigured provider prints a clean "
-            "actionable error for that source rather than a traceback -- ingest "
-            "itself still exits 0. Pass --no-compile to skip the compile step "
-            "entirely (Phase 2 behavior)."
+            "Compile ingested sources into wiki pages after ingest, using the "
+            "configured LLM provider (AuthHub by default; requires "
+            "AUTHHUB_API_KEY). A missing/misconfigured provider aborts BEFORE "
+            "anything is ingested, leaving your files in drop/ -- ingesting "
+            "without a working LLM would otherwise strand them as "
+            "ingested-but-uncompiled, which a later re-drop reports as a "
+            "duplicate. Pass --no-compile to ingest without compiling."
         ),
     ),
 ) -> None:
     """Parse, dedup, and file everything currently sitting in vault/drop/."""
     root = Path(vault_path) if vault_path is not None else Path.cwd()
+    # Preflight before `ingest_drop` writes anything -- see
+    # `_preflight_llm_or_exit`.
+    settings = _preflight_llm_or_exit(root) if compile_ else None
     report = ingest_drop(root)
 
     console.print(f"[green]Ingested:[/green] {len(report.ingested)}")
@@ -103,21 +172,14 @@ def ingest(
     for error in report.errors:
         console.print(f"  ! {error.original_name}: {error.message}")
 
-    if not compile_ or not report.ingested:
+    if not compile_ or settings is None:
         return
 
-    settings = load_settings(root)
-    console.print(f"[cyan]Compiling:[/cyan] {len(report.ingested)}")
-    for source in report.ingested:
-        try:
-            result = compile_source(root, source, settings=settings)
-        except CompileError as exc:
-            console.print(f"  ! {source.original_name}: {exc}", markup=False)
-            continue
-        console.print(
-            f"  ~ {source.original_name} -> {len(result.pages)} page(s), "
-            f"{len(result.contradictions)} contradiction(s), {len(result.links_created)} stub link(s)"
-        )
+    # Compile everything PENDING, not just what this run ingested: a source
+    # whose earlier compile failed stays in the ingest ledger and out of the
+    # CompiledLedger, and re-dropping it is a dedup "duplicate" -- so the old
+    # `not report.ingested` bail here stranded it permanently.
+    _compile_pending_with_progress(root, settings)
 
 
 @app.command(hidden=True)

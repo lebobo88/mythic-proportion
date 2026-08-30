@@ -30,11 +30,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from mythic_proportion.compile.models import CompileError
-from mythic_proportion.compile.pipeline import compile_source
+from mythic_proportion.compile.models import CompileResult
+from mythic_proportion.compile.pipeline import check_compile_client, compile_pending
 from mythic_proportion.config import Settings
 from mythic_proportion.index.embeddings import get_embedder
 from mythic_proportion.index.store import IndexStore
+from mythic_proportion.ingest.models import IngestedSource
 from mythic_proportion.ingest.pipeline import ingest_drop
 
 JobStatus = Literal["queued", "running", "done"]
@@ -323,6 +324,26 @@ class IngestWorker:
         vault_root = self._vault_root
         settings: Settings = self._get_settings()
 
+        # Preflight (fail fast, before anything is written): `ingest_drop`
+        # records each content hash in the dedup ledger BEFORE compile runs
+        # and never rolls it back, so ingesting without a usable LLM leaves
+        # files ingested-but-uncompiled -- and a re-drop is then a no-op
+        # "duplicate". Refuse while the files are still in `drop/`.
+        credential_problem = check_compile_client(settings)
+        if credential_problem is not None:
+            with self._lock:
+                job.errors.append(
+                    {
+                        "original_name": "<preflight>",
+                        "message": (
+                            f"refusing to ingest: {credential_problem}. Files were left in "
+                            "drop/ untouched -- configure a credential and press Ingest again."
+                        ),
+                    }
+                )
+                job.updated_at = time.time()
+            return
+
         report = ingest_drop(vault_root)
 
         with self._lock:
@@ -340,21 +361,35 @@ class IngestWorker:
             )
             job.updated_at = time.time()
 
-        for source in report.ingested:
+        # Compile everything PENDING, not just what this run ingested. A
+        # source whose earlier compile failed (no credential, provider
+        # outage, one oversized document) stays in the ingest ledger and out
+        # of the CompiledLedger; compiling only `report.ingested` left it
+        # stranded forever, since re-dropping it is a dedup "duplicate".
+        # `compile_pending` is the existing, tested recovery path for exactly
+        # this, and `CompiledLedger` keeps it from recompiling finished work.
+        def _on_start(source: IngestedSource) -> None:
             with self._lock:
+                if all(f.name != source.original_name for f in job.files):
+                    job.files.append(JobFileStatus(name=source.original_name, status="queued"))
                 self._set_file_status(job, source.original_name, "compiling")
                 job.updated_at = time.time()
-            try:
-                compile_source(vault_root, source, settings=settings)
-                with self._lock:
+
+        def _on_result(
+            source: IngestedSource,
+            result: CompileResult | None,
+            error: Exception | None,
+        ) -> None:
+            with self._lock:
+                if error is not None:
+                    job.errors.append({"original_name": source.original_name, "message": str(error)})
+                    self._set_file_status(job, source.original_name, "error", str(error))
+                else:
                     job.compiled += 1
                     self._set_file_status(job, source.original_name, "done")
-            except CompileError as exc:
-                with self._lock:
-                    job.errors.append({"original_name": source.original_name, "message": str(exc)})
-                    self._set_file_status(job, source.original_name, "error", str(exc))
-            with self._lock:
                 job.updated_at = time.time()
+
+        compile_pending(vault_root, settings=settings, on_start=_on_start, on_result=_on_result)
 
         # One reindex per job, not per source. IndexStore.reindex is already
         # incremental (only pages whose body content hash changed are

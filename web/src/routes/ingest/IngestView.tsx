@@ -250,6 +250,12 @@ export function IngestView({ onIngestComplete }: { onIngestComplete: () => void 
                 Compiled: {job.compiled}
                 <br />
                 Skipped (duplicates): {job.skipped}
+                {job.skipped > 0 && job.compiled > 0 ? (
+                  <div className="mp-ingest-note">
+                    Some skipped files were already ingested but had never been compiled into
+                    pages; those were compiled just now.
+                  </div>
+                ) : null}
                 <br />
                 Errors: {job.errors.length}
               </div>
